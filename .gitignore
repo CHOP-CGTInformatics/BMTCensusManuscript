@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+.httr-oauth
+.DS_Store
+.quarto
+manuscript/data/*.rds
+manuscript/data-split/*.rds
+/scratch
+manuscript/figures.qmd

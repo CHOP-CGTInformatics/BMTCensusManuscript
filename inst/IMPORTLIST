@@ -1,0 +1,7 @@
+all_of = dplyr
+filter = dplyr
+order = base
+sample = base
+setdiff = base
+setequal = base
+which = base

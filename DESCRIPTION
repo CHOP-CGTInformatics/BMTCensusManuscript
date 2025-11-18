@@ -1,0 +1,29 @@
+Package: BMTCensusManuscript
+Title: What the Package Does (One Line, Title Case)
+Version: 0.0.0.9000
+Authors@R: c(
+    person("Ezra", "Porter", , "porterej@chop.com", role = c("aut", "cre")),
+    person(, role = "ctb")
+  )
+Description: What the package does (one paragraph).
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports: 
+    cli,
+    dplyr,
+    furrr,
+    generics,
+    lubridate,
+    modeltime,
+    modeltime.resample,
+    purrr,
+    recipes,
+    rlang,
+    rsample,
+    stats,
+    tidyr,
+    timetk,
+    tune,
+    workflowsets
