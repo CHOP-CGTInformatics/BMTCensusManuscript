@@ -4,7 +4,8 @@
 .httr-oauth
 .DS_Store
 .quarto
-manuscript/data/*.rds
-manuscript/data-split/*.rds
+/manuscript/data/*.rds
+/manuscript/data-split/*.rds
 /scratch
-manuscript/figures.qmd
+/manuscript/*.qmd
+/manuscript/results
