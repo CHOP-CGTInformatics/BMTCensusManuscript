@@ -7,6 +7,6 @@
 /manuscript/data/*.rds
 /manuscript/data-split/*.rds
 /scratch
-/manuscript/*.qmd
 /manuscript/results
 /manuscript/models
+*.html
