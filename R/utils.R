@@ -37,3 +37,20 @@ default_transplant_types <- function(add = NULL, remove = NULL) {
     setdiff(remove) |>
     unique()
 }
+
+#' Create a `bmt_model`
+#' @param discharge_model discharge model
+#' @param admission_model admission model
+#' @param admission_surv_data survival curves for simulating admission-discharge process
+#' @export
+bmt_model <- function(discharge_model, admission_model, admission_surv_data = default_admission_surv_data()) {
+  out <- list(
+    discharge = discharge_model,
+    admission = admission_model,
+    admission_surv_data = admission_surv_data
+  )
+
+  class(out) <- c("bmt_model", class(out))
+
+  out
+}
