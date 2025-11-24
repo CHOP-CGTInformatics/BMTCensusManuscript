@@ -33,8 +33,8 @@ theme_set(theme_minimal())
 ```{r}
 #| label: run settings
 
-run_split <- TRUE
-run_cv <- TRUE
+run_split <- FALSE
+run_cv <- FALSE
 run_tune <- FALSE
 run_test <- FALSE
 ```
@@ -394,6 +394,8 @@ final_params <- tune_results |>
   distinct(admission_hyperparams, discharge_hyperparams) |>
   as.list() |>
   map(pluck(1))
+
+final_params
 ```
 
 Fit models on training data
