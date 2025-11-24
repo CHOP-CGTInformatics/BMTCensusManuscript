@@ -3,7 +3,6 @@ title: "Reproducibility Supplement"
 format: html
 ---
 
-
 ```{r}
 #| label: libraries
 
@@ -26,6 +25,7 @@ library(dials)
 library(recipes)
 library(tune)
 library(yardstick)
+library(kableExtra)
 
 theme_set(theme_minimal())
 ```
@@ -395,7 +395,9 @@ final_params <- tune_results |>
   as.list() |>
   map(pluck(1))
 
-final_params
+final_params$admission_hyperparams
+
+final_params$discharge_hyperparams
 ```
 
 Fit models on training data
@@ -505,4 +507,307 @@ save_data(models_final, "manuscript/models/models_final.rds")
 #| include: false
 
 models_final <- readRDS("manuscript/models/models_final.rds")
+```
+
+## Manuscript Figures
+
+
+```{r}
+#| label: load figures data
+
+# Date when the data was refreshed
+censoring_date <- as_date("2024-2-29")
+
+manuscript_census_data <- census_data |>
+  mutate(admission_type = case_match(
+    transplant_type,
+    "Allogeneic" ~ "Allo HSCT",
+    "Autologous" ~ "Auto HSCT",
+    "No Transplant" ~ "Other"
+    ),
+    admission_type = factor(admission_type, levels = c("Auto HSCT", "Allo HSCT", "Other"), ordered = TRUE),
+    admission_type_malig = case_when(
+      admission_type == "Allo HSCT" & malignant == "Yes" ~ "Allo HSCT (Malignant)",
+      admission_type == "Allo HSCT" & malignant == "No" ~ "Allo HSCT (Non-Malignant)",
+      .default = admission_type
+    ),
+    admission_type_malig = factor(admission_type_malig, levels = c("Auto HSCT", "Allo HSCT (Malignant)", "Allo HSCT (Non-Malignant)", "Other"), ordered = TRUE)
+  )
+
+manuscript_encounter_data <- manuscript_census_data |>
+  filter(bmt_team_start_date >= "2016-01-01") |>
+  distinct(csn, bmt_team_start_date, bmt_team_end_date, admission_type, malignant, malignancy_history, admission_type_malig) |>
+  mutate(
+    censored = is.na(bmt_team_end_date),
+    los = as.numeric(coalesce(bmt_team_end_date, censoring_date) - bmt_team_start_date, unit = "days")
+  )
+
+manuscript_test_results <- left_join(
+    test_results |>
+        select(test_date, results) |>
+        unnest(results),
+    test_results |>
+        select(test_date, actual) |>
+        unnest(actual),
+    by = c("test_date", ".h")
+) |>
+    filter(.h <= 60)
+
+validation_results <- readRDS("manuscript/data/validation_results.rds")
+
+validation_results_bootstrap <- validation_results |>
+  filter(.h %in% c(15, 30, 60), !is.na(.actual_census)) |>
+  generate_bootstraps(bootstrap_block_size = 7)
+```
+
+### Figure 1
+
+#### a.
+
+```{r}
+#| label: fig 1a
+
+manuscript_encounter_data |>
+  ggplot(aes(x = los, color = admission_type)) +
+  geom_density() +
+  coord_cartesian(xlim = c(0, 80)) +
+  labs(x = "Length of Stay (Days)",
+       y = NULL,
+       color = "Admission Type") +
+  theme(axis.text.y = element_blank()) +
+  scale_color_chop()
+```
+
+#### b.
+
+```{r}
+#| label: fig 1b
+
+fig_1b_data <- manuscript_census_data |>
+  filter(time > 0, date >= "2021-01-01") |>
+  count(date, admission_type, name = "value") |>
+  complete(
+    date = seq(as_date("2021-01-01"), as_date("2023-06-30"), by = "day"),
+    admission_type,
+    fill = list(value=0)
+  )
+
+fig_1b_data |>
+  ggplot(aes(x = date, y = value, fill = admission_type)) +
+  geom_area(aes(group = fct_relevel(admission_type, "Allo HSCT", after = Inf))) +
+  labs(fill = "Admission Type",
+       y = "Midnight Census",
+       x = NULL) +
+  scale_fill_chop() +
+  scale_x_date(date_labels = "%b '%y")
+```
+
+### Figure 2
+
+#### a.
+
+![](fig2a.png)
+
+#### b.
+
+```{r}
+#| label: fig 2b
+
+fig_2b <- list()
+
+fig_2b$date <- as_date("2023-04-01")
+fig_2b$h <- 65
+
+fig_2b$base_data <- manuscript_census_data |>
+  filter(time > 0, date == fig_2b$date)
+
+fig_2b$current_admit_data <- fig_2b$base_data |>
+  extend_discharge_data(fig_2b$h, end_var = bmt_team_end_date) |>
+  mutate(date = fig_2b$date + .h) |>
+  summarize(value = sum(discharge == "No"), .by = date)
+
+# Add in time 0 row
+fig_2b$current_admit_data <- bind_rows(
+  count(fig_2b$base_data, date, name = "value"),
+  fig_2b$current_admit_data
+)
+
+fig_2b$new_admit_data <- admission_data |>
+  filter(date == fig_2b$date) |>
+  unnest(census_contribution) |>
+  filter(h <= fig_2b$h) |>
+  mutate(date = date + h) |>
+  summarize(value = sum(actual), .by = date)
+
+# Add in time 0 row
+fig_2b$new_admit_data <- bind_rows(
+  tibble(date = fig_2b$date, value = 0),
+  fig_2b$new_admit_data
+)
+
+fig_2b$data <- inner_join(
+  rename(fig_2b$current_admit_data, current = value),
+  rename(fig_2b$new_admit_data, new = value),
+  by = "date",
+  relationship = "one-to-one",
+  unmatched = "error"
+) |>
+  mutate(total = current + new, x = row_number() - 1) |>
+  select(-date)
+
+fig_2b$text_y <- 6
+
+components <- list()
+components$names <- c("current", "new", "total")
+components$labs <- c("Current Admissions Component", "Future Admissions Component", "Total")
+components$colors <- chop_colors(c("pink", "blue", "green"))
+
+levels <- components$names |>
+  set_names(components$labs)
+
+colors <- components$colors |>
+  set_names(components$labs)
+
+fig_2b$data |>
+  pivot_longer(-x) |>
+  mutate(name = fct_recode(
+    factor(name, components$names),
+    !!!levels
+  )) |>
+  ggplot(aes(x = x, y = value, color = name)) +
+  geom_line(aes(linewidth = name)) +
+  geom_vline(xintercept = c(0, 30)) +
+  annotate("text",
+           y = fig_2b$text_y,
+           x = 30,
+           label = "Prediction Horizon",
+           angle = 90,
+           vjust = -.25) +
+  annotate("text",
+           y = fig_2b$text_y,
+           x = 0,
+           label = "Current Time",
+           angle = 90,
+           vjust = -.25) +
+  labs(color = NULL,
+       y = "Midnight Census",
+       x = NULL) +
+  coord_cartesian(xlim = c(as_date(NA), fig_2b$h - 5)) +
+  scale_linewidth_manual(values = c(Total=1), na.value = .5, guide = "none") +
+  scale_color_manual(values=colors) +
+  theme_minimal(base_size = 14)
+```
+
+### Table 1
+
+```{r}
+#| label: table 1
+
+table_1 <- list()
+
+table_1$los_data <- manuscript_encounter_data |>
+  summarize(
+    median = median(los),
+    iqr = IQR(los),
+    .by = admission_type_malig
+  )
+
+table_1$census_share_data <- manuscript_census_data |>
+  filter(time > 0, date >= "2016-01-01") |>
+  count(date, admission_type_malig, name = "value") |>
+  complete(
+    date = seq(as_date("2016-01-01"), as_date("2023-06-30"), by = "day"),
+    admission_type_malig,
+    fill = list(value=0)
+  ) |>
+  mutate(pct = value/sum(value), .by = date) |>
+  summarize(pct = mean(pct), .by = admission_type_malig)
+
+table_1$census_share_data |>
+    arrange(admission_type_malig) |>
+    left_join(table_1$los_data, by = "admission_type_malig") |>
+    mutate(
+        across(c(median, iqr), \(x) round(x, 1)),
+        pct = paste0(round(pct*100, 1), "%")
+    ) |>
+    select(
+        `Admission Type` = admission_type_malig,
+        `Average % of Census` = pct,
+        `Median LOS (Days)` = median,
+        `LOS IQR (Days)` = iqr
+    )
+```
+
+### Table 2
+
+```{r}
+#| label: table 2
+
+table_2 <- list()
+
+table_2$test <- make_metrics_table(manuscript_test_results) |>
+  filter(Component == "Total Census") |>
+  select(-Component)
+
+table_2$validation <- make_metrics_table(validation_results) |>
+  filter(Component == "Total Census") |>
+  select(-Component)
+
+table_2$threshholds <- tibble(
+  Horizon = c(15, 30, 60),
+  `Prospective Validation MAPE Threshhold` = c(15, 20, 25),
+  `Prospective Validation Result` = "Pass"
+)
+
+table_2$boot <- summarize_bootstrap(validation_results_bootstrap)$table |>
+  filter(.metric == "mape") |>
+  select(Horizon = .h, `Prospective Validation MAPE 95% Bound` = `0.95`)
+
+left_join(
+  rename_with(table_2$test, \(x) paste("Test Set", x), c(RMSE, MAPE)),
+  rename_with(table_2$validation, \(x) paste("Prospective Validation", x), c(RMSE, MAPE)),
+  by = "Horizon"
+) |>
+  left_join(table_2$boot, by = "Horizon") |>
+  left_join(table_2$threshholds, by = "Horizon") |>
+  mutate(
+    across(ends_with("RMSE"), \(x) round(x, 1)),
+    across(ends_with("MAPE"), \(x) round(x, 1)),
+    across(ends_with("MAPE 95% Bound"), \(x) round(x, 1))
+  ) |>
+  kbl(
+    col.names = c(
+    "Prediction Horizon (Days)",
+    "RMSE",
+    "MAPE",
+    "RMSE",
+    "MAPE",
+    "MAPE 95% Upper Bound",
+    "MAPE 95% Upper Bound Threshold",
+    "Result"
+  ),
+    align = "c"
+  ) |>
+  add_header_above(c(" " = 1, "Held-out Test Set" = 2, "Prospective Validation" = 5), bold = TRUE)
+```
+
+### Figure 3
+
+#### a. Test Set
+
+```{r}
+#| label: fig 3a
+
+manuscript_test_results |>
+  plot_results(.pred_census, .actual_census)
+```
+
+#### b. Prospective Validation
+
+```{r}
+#| label: fig 3b
+
+validation_results |>
+  plot_results(.pred_census, .actual_census) +
+  scale_y_continuous(breaks = c(12, 15, 18, 21))
 ```

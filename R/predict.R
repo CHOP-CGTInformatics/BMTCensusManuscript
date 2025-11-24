@@ -204,7 +204,8 @@ calc_survival_prob <- function(data, by = .row) {
 #' @details
 #' This function assumes covariates are not time-varying and carries their values
 #' forward
-#' @noRd
+#'
+#' @export
 extend_discharge_data <- function(data, h, end_var = NULL) {
   data <- mutate(data, .row = row_number())
 

@@ -13,8 +13,11 @@ RoxygenNote: 7.3.3
 Imports: 
     cli,
     dplyr,
+    fabletools,
+    feasts,
     furrr,
     generics,
+    ggplot2,
     lubridate,
     modeltime,
     modeltime.resample,
@@ -25,5 +28,10 @@ Imports:
     stats,
     tidyr,
     timetk,
+    tsibble,
     tune,
-    workflowsets
+    workflowsets,
+    yardstick
+Depends: 
+    R (>= 3.5)
+LazyData: true

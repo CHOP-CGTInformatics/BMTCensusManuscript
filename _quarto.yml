@@ -9,6 +9,7 @@ format:
     self-contained-math: true
     code-fold: true
     df-print: kable
+    toc: true
 
 execute: 
   warning: false
