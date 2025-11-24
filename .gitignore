@@ -10,3 +10,5 @@
 /manuscript/results
 /manuscript/models
 *.html
+
+/.quarto/

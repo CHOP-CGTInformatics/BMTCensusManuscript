@@ -1,0 +1,15 @@
+project:
+  execute-dir: project
+
+date: last-modified
+
+format:
+  html:
+    embed-resources: true
+    self-contained-math: true
+    code-fold: true
+    df-print: kable
+
+execute: 
+  warning: false
+  message: false

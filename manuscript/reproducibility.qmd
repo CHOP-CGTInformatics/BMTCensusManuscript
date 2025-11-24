@@ -1,8 +1,6 @@
 ---
 title: "Reproducibility Supplement"
-format:
-    html:
-        embed-resources: true
+format: html
 ---
 
 
@@ -14,8 +12,7 @@ library(conflicted)
 conflicts_prefer(dplyr::filter)
 
 library(BMTCensusManuscript)
-library(dplyr)
-library(lubridate)
+library(tidyverse)
 library(timetk)
 library(rsample)
 library(parsnip)
@@ -27,13 +24,17 @@ library(parallel)
 library(future)
 library(dials)
 library(recipes)
-library(purrr)
 library(tune)
+library(yardstick)
+
+theme_set(theme_minimal())
 ```
 
 ```{r}
-run_split <- FALSE
-run_cv <- FALSE
+#| label: run settings
+
+run_split <- TRUE
+run_cv <- TRUE
 run_tune <- FALSE
 run_test <- FALSE
 ```
@@ -43,17 +44,21 @@ run_test <- FALSE
 Load data
 
 ```{r}
+#| label: load data
+
 train_test_split_date <- as_date("2022-09-30")
 
-census_data <- readRDS("data/census.rds")
-admission_data <- readRDS("data/admissions.rds")
-scheduled_admissions <- readRDS("data/scheduled_admissions.rds") |>
+census_data <- readRDS("manuscript/data/census.rds")
+admission_data <- readRDS("manuscript/data/admissions.rds")
+scheduled_admissions <- readRDS("manuscript/data/scheduled_admissions.rds") |>
   count(transplant_type, date, admission_date, name = "scheduled")
 ```
 
 Split census data
 
 ```{r}
+#| label: split census
+
 census_data_split <- census_data |>
     # Don't need these extra columns
     select(!any_of(c("admission_type", "admit_sched_date"))) |>
@@ -63,6 +68,8 @@ census_data_split <- census_data |>
 Split admissions data
 
 ```{r}
+#| label: split admissions
+
 test_length <- as.numeric(max(admission_data$date) - train_test_split_date, unit = "days")
 
 admissions_ts_split <- admission_data |>
@@ -74,6 +81,7 @@ admissions_ts_split <- admission_data |>
 ```
 
 ```{r}
+#| label: save train test data
 #| eval: !expr run_split
 
 discharge_train <- training(census_data_split)
@@ -82,20 +90,21 @@ admission_train <- training(admissions_ts_split)
 discharge_test <- testing(census_data_split)
 admission_test <- testing(admissions_ts_split)
 
-save_data(census_data_split, "data-split/census.rds")
-save_data(admissions_ts_split, "data-split/admissions.rds")
+save_data(census_data_split, "manuscript/data-split/census.rds")
+save_data(admissions_ts_split, "manuscript/data-split/admissions.rds")
 ```
 
 
 ```{r}
+#| label: load train test data
 #| eval: !expr (!run_split)
 #| include: false
 
-discharge_train <- readRDS("data-split/census.rds") |> training()
-admission_train <- readRDS("data-split/admissions.rds") |> training()
+discharge_train <- readRDS("manuscript/data-split/census.rds") |> training()
+admission_train <- readRDS("manuscript/data-split/admissions.rds") |> training()
 
-discharge_test <- readRDS("data-split/census.rds") |> testing()
-admission_test <- readRDS("data-split/admissions.rds") |> testing()
+discharge_test <- readRDS("manuscript/data-split/census.rds") |> testing()
+admission_test <- readRDS("manuscript/data-split/admissions.rds") |> testing()
 ```
 
 ## Model Selection
@@ -103,6 +112,8 @@ admission_test <- readRDS("data-split/admissions.rds") |> testing()
 Define models
 
 ```{r}
+#| label: models
+
 discharge_models <- list(
   logistic = logistic_reg(),
   xgboost = boost_tree(mode = "classification")
@@ -136,7 +147,9 @@ Prepare splits for CV
 
 
 ```{r}
-cv_splits <- make_cv_splits(
+#| label: make cv split
+
+splits <- make_cv_splits(
   discharge_train,
   admission_train,
   h = 90,
@@ -147,27 +160,31 @@ cv_splits <- make_cv_splits(
 Run CV
 
 ```{r}
+#| label: run cv
 #| eval: !expr run_cv
 
-discharge_results_cv <- fit_discharge_resamples(discharge_wflowset, cv_splits)
+discharge_results_cv <- fit_discharge_resamples(discharge_wflowset, splits)
 
-admission_results_cv <- fit_admission_resamples(admission_model_tbl, cv_splits$admission)
+admission_results_cv <- fit_admission_resamples(admission_model_tbl, splits$admission)
 
-cv_results <- collect_cv_results(admission_results, discharge_results, cv_splits)
+cv_results <- collect_cv_results(admission_results_cv, discharge_results_cv, splits)
 
-save_data(cv_results, "results/cv_results.rds")
+save_data(cv_results, "manuscript/results/cv_results.rds")
 ```
 
 
 ```{r}
+#| label: load cv
 #| eval: !expr (!run_cv)
 #| include: false
 
-cv_results <- readRDS("results/cv_results.rds")
+cv_results <- readRDS("manuscript/results/cv_results.rds")
 ```
 
 
 ```{r}
+#| label: cv results
+
 cv_results_summary <- cv_results |>
   select(admission_model, discharge_model, id, results) |>
   unnest(results) |>
@@ -186,6 +203,8 @@ cv_results_summary
 
 
 ```{r}
+#| label: cv plot
+
 cv_results_summary |>
   ggplot(aes(color = paste(admission_model, discharge_model, sep = "; "), y = .estimate, x = factor(.h))) +
   geom_point() +
@@ -198,6 +217,8 @@ cv_results_summary |>
 Discharge
 
 ```{r}
+#| label: discharge tune setup
+
 discharge_model_tune <- boost_tree(
   mode = "classification",
   sample_size = tune(),
@@ -220,6 +241,7 @@ discharge_wflowset_tune <- workflow_set(
 
 
 ```{r}
+#| label: run discharge tune
 #| eval: !expr run_tune
 
 plan("multisession")
@@ -232,6 +254,8 @@ plan("sequential")
 Admission
 
 ```{r}
+#| label: admission tune setup
+
 admission_model_tune <- boost_tree(
   mode = "regression",
   trees = 1000,
@@ -259,6 +283,7 @@ admission_model_grid <- create_model_grid(
 
 
 ```{r}
+#| label: run admission tune
 #| eval: !expr run_tune
 
 plan("multisession")
@@ -282,6 +307,7 @@ plan("sequential")
 
 
 ```{r}
+#| label: run tune sim
 #| eval: !expr run_tune
 
 plan("multisession")
@@ -290,18 +316,21 @@ tune_results <- collect_cv_results(admission_results_tune, discharge_results_tun
 
 plan("sequential")
 
-save_data(tune_results, "results/tune_results.rds")
+save_data(tune_results, "manuscript/results/tune_results.rds")
 ```
 
 ```{r}
+#| label: load tune sim
 #| eval: !expr (!run_tune)
 #| include: false
 
-tune_results <- readRDS("results/tune_results.rds")
+tune_results <- readRDS("manuscript/results/tune_results.rds")
 ```
 
 
 ```{r}
+#| label: tune results
+
 mset <- metric_set(rmse, mape)
 
 tune_results_summary <- tune_results |>
@@ -321,6 +350,22 @@ tune_results_summary <- tune_results |>
 
 
 ```{r}
+#| label: tune results mape plot
+
+tune_results_summary |>
+  filter(.metric == "mape") |>
+  mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
+  mutate(rank = rank(.estimate), .by = .h) |>
+  mutate(avg_rank = dense_rank(avg_estimate)) |>
+  filter(avg_rank <= 30) |>
+  ggplot(aes(y = fct_rev(factor(avg_rank)), x = rank)) +
+  geom_jitter(aes(color = factor(.h)), height = 0)
+```
+
+
+```{r}
+#| label: tune results rmse plot
+
 tune_results_summary |>
   filter(.metric == "rmse") |>
   mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
@@ -333,35 +378,28 @@ tune_results_summary |>
 
 
 ```{r}
-tune_results_summary |>
-  filter(.metric == "rmse") |>
-  mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
-  mutate(rank = rank(.estimate), .by = .h) |>
-  mutate(avg_rank = dense_rank(avg_estimate)) |>
-  filter(avg_rank <= 30) |>
-  ggplot(aes(y = fct_rev(factor(avg_rank)), x = rank)) +
-  geom_jitter(aes(color = factor(.h)), height = 0)
-```
+#| label: select best config
 
-
-```{r}
-best_config <- results_summary |> 
+best_config <- tune_results_summary |> 
   filter(.metric == "rmse") |>
   mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
   filter(dense_rank(avg_estimate) == 1) |>
   distinct(admission_config, discharge_config)
 
-final_params <- results_tune |>
+final_params <- tune_results |>
   filter(
     discharge_config == best_config$discharge_config,
     admission_config == best_config$admission_config
   ) |>
-  distinct(admission_hyperparams, discharge_hyperparams)
+  distinct(admission_hyperparams, discharge_hyperparams) |>
+  as.list() |>
+  map(pluck(1))
 ```
 
 Fit models on training data
 
 ```{r}
+#| label: fit on training
 #| eval: !expr run_tune
 
 discharge_model_train <- workflow(
@@ -381,19 +419,21 @@ admission_model_train <- workflow(
 
 models_train <- bmt_model(discharge_model = discharge_model_train, admission_model = admission_model_train)
 
-save_data(models_train, "models/models_train.rds")
+save_data(models_train, "manuscript/models/models_train.rds")
 ```
 
 ```{r}
+#| label: load models_train
 #| eval: !expr (!run_tune)
 #| include: false
 
-models_train <- readRDS("models/models_train.rds")
+models_train <- readRDS("manuscript/models/models_train.rds")
 ```
 
 ## Test
 
 ```{r}
+#| label: run test
 #| eval: !expr run_test
 
 test_dates <- unique(admission_test$date)
@@ -409,18 +449,42 @@ test_results$results <- pmap(test_results, \(current_admissions, scheduled_admis
   )
 })
 
-save_data(test_results, "results/test_results.rds")
+save_data(test_results, "manuscript/results/test_results.rds")
 ```
 
 ```{r}
+#| label: load test
 #| eval: !expr (!run_test)
 #| include: false
 
-test_results <- readRDS("results/test_results.rds")
+test_results <- readRDS("manuscript/results/test_results.rds")
 ```
 
+```{r}
+#| label: test results summary
+
+left_join(
+    test_results |>
+        select(test_date, results) |>
+        unnest(results),
+    test_results |>
+        select(test_date, actual) |>
+        unnest(actual),
+    by = c("test_date", ".h")
+) |>
+    filter(.h %in% c(15, 30, 60, 90)) |>
+    pivot_longer(
+        matches("\\.(actual|pred)_"),
+        names_to = c(".value", "stat"),
+        names_pattern = "\\.(actual|pred)_(.+)"
+    ) |>
+    group_by(stat, .h) |>
+    mset(actual, pred) |>
+    filter(stat == "census")
+```
 
 ```{r}
+#| label: fit on full data
 #| eval: !expr run_test
 
 discharge_model_final <- fit(models_train$discharge, census_data)
@@ -429,13 +493,14 @@ admission_model_final <- modeltime_refit(models_train$admission, admission_data)
 
 models_final <- bmt_model(discharge_model = discharge_model_final, admission_model = admission_model_final)
 
-save_data(models_final, "models/models_final.rds")
+save_data(models_final, "manuscript/models/models_final.rds")
 ```
 
 
 ```{r}
+#| label: load fit on full data
 #| eval: !expr (!run_test)
 #| include: false
 
-models_final <- readRDS("models/models_final.rds")
+models_final <- readRDS("manuscript/models/models_final.rds")
 ```
