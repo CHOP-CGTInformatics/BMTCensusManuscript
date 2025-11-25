@@ -2,8 +2,7 @@ Package: BMTCensusManuscript
 Title: What the Package Does (One Line, Title Case)
 Version: 0.0.0.9000
 Authors@R: c(
-    person("Ezra", "Porter", , "porterej@chop.com", role = c("aut", "cre")),
-    person(, role = "ctb")
+    person("Ezra", "Porter", , "porterej@chop.com", role = c("aut", "cre"))
   )
 Description: What the package does (one paragraph).
 License: MIT + file LICENSE
