@@ -11,7 +11,6 @@ discharge_rec <- function(data) {
 
 #' @export
 admission_rec <- function(data, type = "poisson") {
-  
   allowed_types <- c("poisson", "xgb")
 
   if (!type %in% allowed_types) {
@@ -20,7 +19,7 @@ admission_rec <- function(data, type = "poisson") {
       "i" = "{.code type} is {type}"
     ))
   }
-  
+
   out <- data |>
     select(date, transplant_type, value) |>
     recipe(formula = value ~ .) |>

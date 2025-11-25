@@ -57,7 +57,7 @@ summarize_bootstrap <- function(result, actual_metrics = NULL) {
 
   if (!is.null(actual_metrics)) {
     table_empirical <- res_summary |>
-      reframe(d = quantile(d, 1-quantiles), q = quantiles, .by = c(.h, .metric, value)) |>
+      reframe(d = quantile(d, 1 - quantiles), q = quantiles, .by = c(.h, .metric, value)) |>
       mutate(.estimate = value - d) |>
       pivot_wider(id_cols = c(.h, .metric), names_from = q, values_from = .estimate)
   }
@@ -86,19 +86,21 @@ make_metrics_table <- function(data, h = c(15, 30, 60)) {
     mset(actual, pred) |>
     mutate(.metric = toupper(.metric)) |>
     pivot_wider(id_cols = c(stat, .h), names_from = .metric, values_from = .estimate) |>
-    mutate(stat = case_match(stat,
-                             "census" ~ "Total Census",
-                             "current_admission" ~ "Admitted Before Prediction Time",
-                             "new_admission" ~ "Admitted After Prediction Time")) |>
+    mutate(stat = case_match(
+      stat,
+      "census" ~ "Total Census",
+      "current_admission" ~ "Admitted Before Prediction Time",
+      "new_admission" ~ "Admitted After Prediction Time"
+    )) |>
     select(Horizon = .h, Component = stat, RMSE, MAPE)
 }
 
 #' @export
 plot_results <- function(data,
-                          pred,
-                          actual,
-                          title = NULL,
-                          scales = "fixed") {
+                         pred,
+                         actual,
+                         title = NULL,
+                         scales = "fixed") {
   data |>
     filter(.h %in% c(15, 30, 60)) |>
     rename(Predicted = {{ pred }}, Actual = {{ actual }}, `Prediction Horizon (Days)` = .h) |>

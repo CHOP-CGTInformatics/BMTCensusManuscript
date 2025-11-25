@@ -30,9 +30,11 @@ make_cv_splits <- function(discharge_train, admission_train, h, scheduled_admiss
     dates = cv_dates
   )
 
-  out <- list(admission = admission_splits,
-              discharge = discharge_splits,
-              data = discharge_train_extended)
+  out <- list(
+    admission = admission_splits,
+    discharge = discharge_splits,
+    data = discharge_train_extended
+  )
 
   if (!is.null(scheduled_admissions)) {
     scheduled_admissions_nested <- scheduled_admissions |>
@@ -58,7 +60,6 @@ make_cv_splits <- function(discharge_train, admission_train, h, scheduled_admiss
           # remove date range where stemtrak audit trail was broken
           filter(date < "2019-03-12" | date >= "2020-06-01")
       }
-
     )
 
     out$scheduled_admissions <- tibble(
@@ -111,11 +112,9 @@ make_census_ts_splits <- function(
 }
 
 make_discharge_splits <- function(data, dates) {
-
   splits <- map(dates, \(x) make_one_discharge_split(x, data = data))
 
   manual_rset(splits, ids = factor(dates))
-
 }
 
 make_one_discharge_split <- function(cv_date, data) {
@@ -232,10 +231,9 @@ fit_admission_resamples <- function(model_tbl, splits, verbose = TRUE) {
 
 #' @export
 collect_cv_results <- function(admission_results,
-                            discharge_results,
-                            splits,
-                            control = control_sim()) {
-
+                               discharge_results,
+                               splits,
+                               control = control_sim()) {
   # Prep for sim
   combined_results <- admission_results |>
     left_join(
@@ -310,8 +308,10 @@ collect_cv_results <- function(admission_results,
       select(admission_results, admission_model, admission_config, id, admission_hyperparams = hyperparams),
       by = c("admission_model", "admission_config", "id")
     ) |>
-    mutate(.actual_census = .actual_current_admission + .actual_new_admission,
-           .pred_census = .pred_current_admission + .pred_new_admission) |>
+    mutate(
+      .actual_census = .actual_current_admission + .actual_new_admission,
+      .pred_census = .pred_current_admission + .pred_new_admission
+    ) |>
     nest(.by = c(
       admission_model,
       admission_config,

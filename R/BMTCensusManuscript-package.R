@@ -1,4 +1,3 @@
-
 # The following block is used by autoimport.
 ## autoimport namespace: start
 #' @importFrom cli cli_abort cli_warn

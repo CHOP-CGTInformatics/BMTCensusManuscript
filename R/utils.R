@@ -1,6 +1,6 @@
 #' @export
 save_data <- function(data, path, quiet = TRUE) {
-  if(!dir.exists(dirname(path))) {
+  if (!dir.exists(dirname(path))) {
     dir.create(dirname(path), recursive = TRUE)
   }
 
@@ -9,7 +9,7 @@ save_data <- function(data, path, quiet = TRUE) {
   if (!quiet) {
     message("Saving data to ", path)
   }
-  
+
   invisible(data)
 }
 

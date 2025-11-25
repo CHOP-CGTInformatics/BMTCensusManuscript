@@ -11,7 +11,7 @@
 #' @param scheduled_admissions dataframe containing scheduled admissions
 #' @param control a control object
 #' @param type 'census' or 'survival'
-#' 
+#'
 #' @returns dataframe of prediction for current census component, new admission component, and total census
 #'
 #' @details
@@ -30,9 +30,8 @@ predict_census <- function(models,
                            scheduled_admissions = NULL,
                            control = control_sim(),
                            type = "census") {
-  
   validate_type(type)
-  
+
   max_h <- max(h)
   day_0 <- guess_day_0(current_census)
 
@@ -54,7 +53,6 @@ predict_census <- function(models,
   )
 
   if (type == "survival") {
-    
     pred_admission_discharge <- pred_admission_discharge |>
       # Fill in start time of 0 since these are predicted new admits
       # Recalculate date since sim_admission_discharge isn't date aware
@@ -63,7 +61,7 @@ predict_census <- function(models,
       # Make .rep unique within iteration
       # Currently unique within .iter, transplant_type, date but this is more intuitive
       mutate(.rep = row_number(), .by = .iter)
-    
+
     out <- bind_rows(
       bind_cols(current_census, pred_discharge) |>
         mutate(current_or_new = "current"),
@@ -113,7 +111,7 @@ prep_admission_data <- function(day_0,
   out <- expand_grid(
     tibble(
       date = seq(day_0, by = "day", length.out = h),
-      .h = 0:(h-1)
+      .h = 0:(h - 1)
     ),
     transplant_type = transplant_types
   )
@@ -153,7 +151,6 @@ prep_admission_data <- function(day_0,
 #' survival probabilities at each time.
 #' @export
 predict_discharge <- function(model, new_data, h, type = "census") {
-
   validate_type(type)
 
   max_h <- max(h)
@@ -178,7 +175,6 @@ predict_discharge <- function(model, new_data, h, type = "census") {
 
     return(out)
   }
-
 }
 
 #' Calculate survival probabilities from hazards
@@ -271,7 +267,6 @@ sim_admission_discharge <- function(pred_admission,
                                     h = NULL,
                                     type = "census",
                                     control = control_sim()) {
-  
   validate_type(type)
 
   # Get h from pred_admission if not specified
