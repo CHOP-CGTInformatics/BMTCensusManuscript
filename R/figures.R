@@ -117,3 +117,43 @@ plot_results <- function(data,
     ) +
     scale_x_date(date_labels = "%b '%y")
 }
+
+#' @export
+plot_prediction_curves <- function(data,
+                         pred,
+                         actual,
+                         group,
+                         n_show = 12,
+                         title = NULL) {
+  show_groups <- get_show_groups(data, {{ group }}, n_show)
+
+  data |>
+    filter({{ group }} %in% show_groups) |>
+    rename(Predicted = {{ pred }}, Actual = {{ actual }}) |>
+    mutate({{ group }} := factor({{ group }})) |>
+    pivot_longer(c(Predicted, Actual)) |>
+    ggplot(aes(x = date, y = value, color = {{ group }}, linetype = name, group = paste({{ group }}, name))) +
+    geom_line() +
+    labs(
+      color = "Prediction Day 0",
+      linetype = NULL,
+      x = NULL,
+      y = "Midnight Census",
+      title = title
+    ) +
+    scale_x_date(date_labels = "%b '%y") +
+    theme(legend.margin = margin(0, 0, 0, 0)) +
+    guides(linetype = guide_legend(order = 1), color = guide_legend(order = 2))
+}
+
+get_show_groups <- function(data, group, n) {
+  groups <- data |>
+    arrange({{ group }}) |>
+    distinct({{ group }}) |>
+    pull({{ group }})
+
+  idx <- seq(1, length(groups), length.out = n) |>
+    round()
+
+  groups[idx]
+}

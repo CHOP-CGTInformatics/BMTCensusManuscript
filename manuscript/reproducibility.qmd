@@ -1,7 +1,18 @@
 ---
 title: "Reproducibility Supplement"
+description: "Multi-week Forecasting of Pediatric Blood and Marrow Transplant Hospital Census: Development and Real-World Validation"
+author:
+  - name: "Ezra Porter"
+    affiliation: "Children's Hospital of Philadelphia"
 format: html
 ---
+
+# Analyses
+
+## Setup
+
+<details>
+<summary>Load required libraries</summary>
 
 ```{r}
 #| label: libraries
@@ -39,9 +50,12 @@ run_tune <- FALSE
 run_test <- FALSE
 ```
 
-## Split Data
+</details>
 
-Load data
+## Data
+
+<details>
+<summary>Load census, admissions, and scheduled admissions data</summary>
 
 ```{r}
 #| label: load data
@@ -54,466 +68,13 @@ scheduled_admissions <- readRDS("manuscript/data/scheduled_admissions.rds") |>
   count(transplant_type, date, admission_date, name = "scheduled")
 ```
 
-Split census data
+</details>
+
+<details>
+<summary>Plot length of stay by admission type **(Figure 1a)**</summary>
 
 ```{r}
-#| label: split census
-
-census_data_split <- census_data |>
-  # Don't need these extra columns
-  select(!any_of(c("admission_type", "admit_sched_date"))) |>
-  train_test_split(split_date = train_test_split_date)
-```
-
-Split admissions data
-
-```{r}
-#| label: split admissions
-
-test_length <- as.numeric(max(admission_data$date) - train_test_split_date, unit = "days")
-
-admissions_ts_split <- admission_data |>
-  time_series_split(
-    date_var = date,
-    assess = test_length,
-    cumulative = TRUE
-  )
-```
-
-```{r}
-#| label: save train test data
-#| eval: !expr run_split
-
-discharge_train <- training(census_data_split)
-admission_train <- training(admissions_ts_split)
-
-discharge_test <- testing(census_data_split)
-admission_test <- testing(admissions_ts_split)
-
-save_data(census_data_split, "manuscript/data-split/census.rds")
-save_data(admissions_ts_split, "manuscript/data-split/admissions.rds")
-```
-
-
-```{r}
-#| label: load train test data
-#| eval: !expr (!run_split)
-#| include: false
-
-discharge_train <- readRDS("manuscript/data-split/census.rds") |> training()
-admission_train <- readRDS("manuscript/data-split/admissions.rds") |> training()
-
-discharge_test <- readRDS("manuscript/data-split/census.rds") |> testing()
-admission_test <- readRDS("manuscript/data-split/admissions.rds") |> testing()
-```
-
-## Model Selection
-
-Define models
-
-```{r}
-#| label: models
-
-discharge_models <- list(
-  logistic = logistic_reg(),
-  xgboost = boost_tree(mode = "classification")
-)
-
-discharge_wflowset <- workflow_set(
-  preproc = list(baseline = discharge_rec(discharge_train)),
-  models = discharge_models
-)
-
-admission_wflow_poisson <- workflow(
-  preprocessor = admission_rec(admission_train, type = "poisson"),
-  spec = poisson_reg("regression")
-)
-
-admission_wflow_xgb <- workflow(
-  preprocessor = admission_rec(admission_train, type = "xgb"),
-  spec = boost_tree("regression") |>
-    set_engine("xgboost", objective = "count:poisson")
-)
-
-admission_model_tbl <- modeltime_table(
-  fit(admission_wflow_poisson, admission_train),
-  fit(admission_wflow_xgb, admission_train)
-)
-
-admission_model_tbl$.model_id <- c("poisson", "xgboost")
-```
-
-Prepare splits for CV
-
-
-```{r}
-#| label: make cv split
-
-splits <- make_cv_splits(
-  discharge_train,
-  admission_train,
-  h = 90,
-  scheduled_admissions = scheduled_admissions
-)
-```
-
-Run CV
-
-```{r}
-#| label: run cv
-#| eval: !expr run_cv
-
-discharge_results_cv <- fit_discharge_resamples(discharge_wflowset, splits)
-
-admission_results_cv <- fit_admission_resamples(admission_model_tbl, splits$admission)
-
-cv_results <- collect_cv_results(admission_results_cv, discharge_results_cv, splits)
-
-save_data(cv_results, "manuscript/results/cv_results.rds")
-```
-
-
-```{r}
-#| label: load cv
-#| eval: !expr (!run_cv)
-#| include: false
-
-cv_results <- readRDS("manuscript/results/cv_results.rds")
-```
-
-
-```{r}
-#| label: cv results
-
-cv_results_summary <- cv_results |>
-  select(admission_model, discharge_model, id, results) |>
-  unnest(results) |>
-  filter(.h %in% c(15, 30, 60, 90)) |>
-  pivot_longer(
-    matches("actual|pred"),
-    names_to = c(".value", "stat"),
-    names_pattern = "\\.(actual|pred)_(.+)"
-  ) |>
-  group_by(admission_model, discharge_model, stat, .h) |>
-  rmse(actual, pred) |>
-  filter(stat == "census")
-
-cv_results_summary
-```
-
-
-```{r}
-#| label: cv plot
-
-cv_results_summary |>
-  ggplot(aes(color = paste(admission_model, discharge_model, sep = "; "), y = .estimate, x = factor(.h))) +
-  geom_point() +
-  geom_line(aes(group = paste(admission_model, discharge_model))) +
-  labs(y = "RMSE", x = "h (days ahead)", color = NULL)
-```
-
-## Tune
-
-Discharge
-
-```{r}
-#| label: discharge tune setup
-
-discharge_model_tune <- boost_tree(
-  mode = "classification",
-  sample_size = tune(),
-  learn_rate = tune(),
-  trees = 1000,
-  min_n = tune(),
-  mtry = tune()
-)
-
-params <- discharge_model_tune |>
-  extract_parameter_set_dials() |>
-  finalize(bake(prep(discharge_rec(discharge_train)), new_data = NULL))
-
-discharge_wflowset_tune <- workflow_set(
-  preproc = list(baseline = discharge_rec(discharge_train)),
-  models = list(xgboost = discharge_model_tune)
-) |>
-  option_add(grid = 20, param_info = params)
-```
-
-
-```{r}
-#| label: run discharge tune
-#| eval: !expr run_tune
-
-plan("multisession")
-
-discharge_results_tune <- fit_discharge_resamples(discharge_wflowset_tune, splits)
-
-plan("sequential")
-```
-
-Admission
-
-```{r}
-#| label: admission tune setup
-
-admission_model_tune <- boost_tree(
-  mode = "regression",
-  trees = 1000,
-  sample_size = tune(),
-  learn_rate = tune(),
-  min_n = tune(),
-  mtry = tune()
-) |>
-  set_engine("xgboost", objective = "count:poisson")
-
-admission_grid <- admission_model_tune |>
-  extract_parameter_set_dials() |>
-  finalize(juice(prep(admission_rec(admission_train, type = "xgb")))) |>
-  grid_space_filling(size = 20)
-
-admission_model_grid <- create_model_grid(
-  grid = admission_grid,
-  f_model_spec = boost_tree,
-  engine_name = "xgboost",
-  mode = "regression",
-  trees = 1000,
-  engine_params = list(objective = "count:poisson")
-)
-```
-
-
-```{r}
-#| label: run admission tune
-#| eval: !expr run_tune
-
-plan("multisession")
-
-admission_model_tbl_tune <- workflow_set(
-  preproc = list(admission_rec(admission_train, type = "xgb")),
-  models = admission_model_grid$.models
-) |>
-  modeltime_fit_workflowset(data = admission_train, control = control_fit_workflowset(allow_par = TRUE))
-
-admission_model_tbl_tune$.model_id <- "xgboost"
-admission_model_tbl_tune$.config <- 1:nrow(admission_model_tbl_tune)
-admission_model_tbl_tune$hyperparams <- admission_model_grid |>
-  select(-.models) |>
-  pmap(tibble)
-
-admission_results_tune <- fit_admission_resamples(admission_model_tbl_tune, splits$admission)
-
-plan("sequential")
-```
-
-
-```{r}
-#| label: run tune sim
-#| eval: !expr run_tune
-
-plan("multisession")
-
-tune_results <- collect_cv_results(admission_results_tune, discharge_results_tune, splits)
-
-plan("sequential")
-
-save_data(tune_results, "manuscript/results/tune_results.rds")
-```
-
-```{r}
-#| label: load tune sim
-#| eval: !expr (!run_tune)
-#| include: false
-
-tune_results <- readRDS("manuscript/results/tune_results.rds")
-```
-
-
-```{r}
-#| label: tune results
-
-mset <- metric_set(rmse, mape)
-
-tune_results_summary <- tune_results |>
-  rename(discharge = discharge_hyperparams, admission = admission_hyperparams) |>
-  unnest(c(discharge, admission), names_sep = "_") |>
-  unnest(results) |>
-  filter(.h %in% c(15, 30, 60, 90)) |>
-  pivot_longer(
-    matches("actual|pred"),
-    names_to = c(".value", "stat"),
-    names_pattern = "\\.(actual|pred)_(.+)"
-  ) |>
-  group_by(admission_config, discharge_config, stat, .h, pick(matches("mtry|min_n|learn_rate|sample_size$"))) |>
-  mset(actual, pred) |>
-  filter(stat == "census")
-```
-
-
-```{r}
-#| label: tune results mape plot
-
-tune_results_summary |>
-  filter(.metric == "mape") |>
-  mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
-  mutate(rank = rank(.estimate), .by = .h) |>
-  mutate(avg_rank = dense_rank(avg_estimate)) |>
-  filter(avg_rank <= 30) |>
-  ggplot(aes(y = fct_rev(factor(avg_rank)), x = rank)) +
-  geom_jitter(aes(color = factor(.h)), height = 0)
-```
-
-
-```{r}
-#| label: tune results rmse plot
-
-tune_results_summary |>
-  filter(.metric == "rmse") |>
-  mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
-  mutate(rank = rank(.estimate), .by = .h) |>
-  mutate(avg_rank = dense_rank(avg_estimate)) |>
-  filter(avg_rank <= 30) |>
-  ggplot(aes(y = fct_rev(factor(avg_rank)), x = rank)) +
-  geom_jitter(aes(color = factor(.h)), height = 0)
-```
-
-
-```{r}
-#| label: select best config
-
-best_config <- tune_results_summary |>
-  filter(.metric == "rmse") |>
-  mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
-  filter(dense_rank(avg_estimate) == 1) |>
-  distinct(admission_config, discharge_config)
-
-final_params <- tune_results |>
-  filter(
-    discharge_config == best_config$discharge_config,
-    admission_config == best_config$admission_config
-  ) |>
-  distinct(admission_hyperparams, discharge_hyperparams) |>
-  as.list() |>
-  map(pluck(1))
-
-final_params$admission_hyperparams
-
-final_params$discharge_hyperparams
-```
-
-Fit models on training data
-
-```{r}
-#| label: fit on training
-#| eval: !expr run_tune
-
-discharge_model_train <- workflow(
-  discharge_rec(discharge_train),
-  discharge_model_tune
-) |>
-  finalize_workflow(final_params$discharge_hyperparams) |>
-  fit(discharge_train)
-
-admission_model_train <- workflow(
-  admission_rec(admission_train, type = "xgb"),
-  admission_model_tune
-) |>
-  finalize_workflow(final_params$admission_hyperparams) |>
-  fit(admission_train) |>
-  modeltime_table()
-
-models_train <- bmt_model(discharge_model = discharge_model_train, admission_model = admission_model_train)
-
-save_data(models_train, "manuscript/models/models_train.rds")
-```
-
-```{r}
-#| label: load models_train
-#| eval: !expr (!run_tune)
-#| include: false
-
-models_train <- readRDS("manuscript/models/models_train.rds")
-```
-
-## Test
-
-```{r}
-#| label: run test
-#| eval: !expr run_test
-
-test_dates <- unique(admission_test$date)
-
-test_results <- make_test_data(test_dates, discharge_test, admission_test, scheduled_admissions)
-
-test_results$results <- pmap(test_results, \(current_admissions, scheduled_admissions, ...) {
-  predict_census(
-    models = models_train,
-    h = 1:90,
-    current_census = current_admissions,
-    scheduled_admissions = scheduled_admissions
-  )
-})
-
-save_data(test_results, "manuscript/results/test_results.rds")
-```
-
-```{r}
-#| label: load test
-#| eval: !expr (!run_test)
-#| include: false
-
-test_results <- readRDS("manuscript/results/test_results.rds")
-```
-
-```{r}
-#| label: test results summary
-
-left_join(
-  test_results |>
-    select(test_date, results) |>
-    unnest(results),
-  test_results |>
-    select(test_date, actual) |>
-    unnest(actual),
-  by = c("test_date", ".h")
-) |>
-  filter(.h %in% c(15, 30, 60, 90)) |>
-  pivot_longer(
-    matches("\\.(actual|pred)_"),
-    names_to = c(".value", "stat"),
-    names_pattern = "\\.(actual|pred)_(.+)"
-  ) |>
-  group_by(stat, .h) |>
-  mset(actual, pred) |>
-  filter(stat == "census")
-```
-
-```{r}
-#| label: fit on full data
-#| eval: !expr run_test
-
-discharge_model_final <- fit(models_train$discharge, census_data)
-
-admission_model_final <- modeltime_refit(models_train$admission, admission_data)
-
-models_final <- bmt_model(discharge_model = discharge_model_final, admission_model = admission_model_final)
-
-save_data(models_final, "manuscript/models/models_final.rds")
-```
-
-
-```{r}
-#| label: load fit on full data
-#| eval: !expr (!run_test)
-#| include: false
-
-models_final <- readRDS("manuscript/models/models_final.rds")
-```
-
-## Manuscript Figures
-
-
-```{r}
-#| label: load figures data
+#| label: fig 1a
 
 # Date when the data was refreshed
 censoring_date <- as_date("2024-2-29")
@@ -543,31 +104,6 @@ manuscript_encounter_data <- manuscript_census_data |>
     los = as.numeric(coalesce(bmt_team_end_date, censoring_date) - bmt_team_start_date, unit = "days")
   )
 
-manuscript_test_results <- left_join(
-  test_results |>
-    select(test_date, results) |>
-    unnest(results),
-  test_results |>
-    select(test_date, actual) |>
-    unnest(actual),
-  by = c("test_date", ".h")
-) |>
-  filter(.h <= 60)
-
-validation_results <- readRDS("manuscript/data/validation_results.rds")
-
-validation_results_bootstrap <- validation_results |>
-  filter(.h %in% c(15, 30, 60), !is.na(.actual_census)) |>
-  generate_bootstraps(bootstrap_block_size = 7)
-```
-
-### Figure 1
-
-#### a.
-
-```{r}
-#| label: fig 1a
-
 manuscript_encounter_data |>
   ggplot(aes(x = los, color = admission_type)) +
   geom_density() +
@@ -581,7 +117,11 @@ manuscript_encounter_data |>
   scale_color_chop()
 ```
 
-#### b.
+</details>
+
+<details>
+
+<summary>Plot daily census by admission type **(Figure 1b)**</summary>
 
 ```{r}
 #| label: fig 1b
@@ -607,13 +147,19 @@ fig_1b_data |>
   scale_x_date(date_labels = "%b '%y")
 ```
 
-### Figure 2
+</details>
 
-#### a.
+<details>
+
+<summary>Schematic overview of census prediction model **(Figure 2a)**</summary>
 
 ![](fig2a.png)
 
-#### b.
+</details>
+
+<details>
+
+<summary>Plot representative example of census components **(Figure 2b)**</summary>
 
 ```{r}
 #| label: fig 2b
@@ -707,7 +253,11 @@ fig_2b$data |>
   theme_minimal(base_size = 14)
 ```
 
-### Table 1
+</details>
+
+<details>
+
+<summary>Generate descriptive statistics of LOS and admission rates **(Table 1)**</summary>
 
 ```{r}
 #| label: table 1
@@ -747,10 +297,553 @@ table_1$census_share_data |>
   )
 ```
 
-### Table 2
+</details>
+
+## Model Selection
+
+<details>
+
+<summary>Split census data into train and test set</summary>
+
+Patients may have multiple encounters. In order to prevent leakage between training and testing we remove patients from the training data that appear in the test set.
+
+```{r}
+#| label: split census
+
+census_data_split <- census_data |>
+  # Don't need these extra columns
+  select(!any_of(c("admission_type", "admit_sched_date"))) |>
+  train_test_split(split_date = train_test_split_date)
+```
+
+</details>
+
+<details>
+
+<summary>Split admission data into train and test set</summary>
+
+```{r}
+#| label: split admissions
+
+test_length <- as.numeric(max(admission_data$date) - train_test_split_date, unit = "days")
+
+admissions_ts_split <- admission_data |>
+  time_series_split(
+    date_var = date,
+    assess = test_length,
+    cumulative = TRUE
+  )
+```
+
+```{r}
+#| label: save train test data
+#| eval: !expr run_split
+
+discharge_train <- training(census_data_split)
+admission_train <- training(admissions_ts_split)
+
+discharge_test <- testing(census_data_split)
+admission_test <- testing(admissions_ts_split)
+
+save_data(census_data_split, "manuscript/data-split/census.rds")
+save_data(admissions_ts_split, "manuscript/data-split/admissions.rds")
+```
+
+</details>
+
+```{r}
+#| label: load train test data
+#| eval: !expr (!run_split)
+#| include: false
+
+discharge_train <- readRDS("manuscript/data-split/census.rds") |> training()
+admission_train <- readRDS("manuscript/data-split/admissions.rds") |> training()
+
+discharge_test <- readRDS("manuscript/data-split/census.rds") |> testing()
+admission_test <- readRDS("manuscript/data-split/admissions.rds") |> testing()
+```
+
+<details>
+
+<summary>Define candidates for discharge and admission models</summary>
+
+The discharge model is a binary classification model predicting discharge on a given day.
+
+The admission model is a count model predicting the number of new admissions per day by `transplant_type`.
+
+Discharge:
+- Logistic Regression
+- XGBoost
+
+Admission:
+- Poisson Regression
+- XGBoost
+
+```{r}
+#| label: models
+
+discharge_models <- list(
+  logistic = logistic_reg(),
+  xgboost = boost_tree(mode = "classification")
+)
+
+discharge_wflowset <- workflow_set(
+  preproc = list(baseline = discharge_rec(discharge_train)),
+  models = discharge_models
+)
+
+admission_wflow_poisson <- workflow(
+  preprocessor = admission_rec(admission_train, type = "poisson"),
+  spec = poisson_reg("regression")
+)
+
+admission_wflow_xgb <- workflow(
+  preprocessor = admission_rec(admission_train, type = "xgb"),
+  spec = boost_tree("regression") |>
+    set_engine("xgboost", objective = "count:poisson")
+)
+
+admission_model_tbl <- modeltime_table(
+  fit(admission_wflow_poisson, admission_train),
+  fit(admission_wflow_xgb, admission_train)
+)
+
+admission_model_tbl$.model_id <- c("poisson", "xgboost")
+```
+
+</details>
+
+<details>
+<summary>Create folds for cross validation</summary>
+
+A single fold consists of a discharge fold and an admission fold aligned by prediction date, the first date in the test split of the fold.
+
+Each discharge fold contains:
+
+- A test split with the census on the prediction date
+- A train split with the census for all days before the prediction date
+
+Each admission fold contains:
+
+- A test split with admissions data for the prediction date and the 90 days after
+- A train split admission data for all days before the prediction date
+
+```{r}
+#| label: make cv split
+
+splits <- make_cv_splits(
+  discharge_train,
+  admission_train,
+  h = 90,
+  scheduled_admissions = scheduled_admissions
+)
+```
+
+</details>
+
+<details>
+
+<summary>Run cross validation to compare candidate models</summary>
+
+```{r}
+#| label: run cv
+#| eval: !expr run_cv
+
+discharge_results_cv <- fit_discharge_resamples(discharge_wflowset, splits)
+
+admission_results_cv <- fit_admission_resamples(admission_model_tbl, splits$admission)
+
+cv_results <- collect_cv_results(admission_results_cv, discharge_results_cv, splits)
+
+save_data(cv_results, "manuscript/results/cv_results.rds")
+```
+
+</details>
+
+```{r}
+#| label: load cv
+#| eval: !expr (!run_cv)
+#| include: false
+
+cv_results <- readRDS("manuscript/results/cv_results.rds")
+```
+
+<details>
+
+<summary>Compute RMSE for model selection results</summary>
+
+```{r}
+#| label: cv results
+
+cv_results_summary <- cv_results |>
+  select(admission_model, discharge_model, id, results) |>
+  unnest(results) |>
+  filter(.h %in% c(15, 30, 60, 90)) |>
+  pivot_longer(
+    matches("actual|pred"),
+    names_to = c(".value", "stat"),
+    names_pattern = "\\.(actual|pred)_(.+)"
+  ) |>
+  group_by(admission_model, discharge_model, stat, .h) |>
+  rmse(actual, pred) |>
+  filter(stat == "census")
+```
+
+</details>
+
+<details>
+
+<summary>Generate line plot of model RMSE over prediction horizon</summary>
+
+```{r}
+#| label: cv plot
+
+cv_results_summary |>
+  ggplot(aes(color = paste(admission_model, discharge_model, sep = "; "), y = .estimate, x = factor(.h))) +
+  geom_point() +
+  geom_line(aes(group = paste(admission_model, discharge_model))) +
+  labs(y = "RMSE", x = "h (days ahead)", color = NULL)
+```
+
+</details>
+
+## Model Tuning
+
+Having selected the XGBoost model for both the admission and discharge models we now jointly tune all hyperparameters using grid search.
+
+<details>
+
+<summary>Create tuning grid for discharge model</summary>
+
+```{r}
+#| label: discharge tune setup
+
+discharge_model_tune <- boost_tree(
+  mode = "classification",
+  sample_size = tune(),
+  learn_rate = tune(),
+  trees = 1000,
+  min_n = tune(),
+  mtry = tune()
+)
+
+params <- discharge_model_tune |>
+  extract_parameter_set_dials() |>
+  finalize(bake(prep(discharge_rec(discharge_train)), new_data = NULL))
+
+discharge_wflowset_tune <- workflow_set(
+  preproc = list(baseline = discharge_rec(discharge_train)),
+  models = list(xgboost = discharge_model_tune)
+) |>
+  option_add(grid = 20, param_info = params)
+```
+
+</details>
+
+<details>
+
+<summary>Fit models on discharge tuning grid</summary>
+
+```{r}
+#| label: run discharge tune
+#| eval: !expr run_tune
+
+plan("multisession")
+
+discharge_results_tune <- fit_discharge_resamples(discharge_wflowset_tune, splits)
+
+plan("sequential")
+```
+
+</details>
+
+<details>
+
+<summary>Create tuning grid for admission model</summary>
+
+```{r}
+#| label: admission tune setup
+
+admission_model_tune <- boost_tree(
+  mode = "regression",
+  trees = 1000,
+  sample_size = tune(),
+  learn_rate = tune(),
+  min_n = tune(),
+  mtry = tune()
+) |>
+  set_engine("xgboost", objective = "count:poisson")
+
+admission_grid <- admission_model_tune |>
+  extract_parameter_set_dials() |>
+  finalize(juice(prep(admission_rec(admission_train, type = "xgb")))) |>
+  grid_space_filling(size = 20)
+
+admission_model_grid <- create_model_grid(
+  grid = admission_grid,
+  f_model_spec = boost_tree,
+  engine_name = "xgboost",
+  mode = "regression",
+  trees = 1000,
+  engine_params = list(objective = "count:poisson")
+)
+```
+
+</details>
+
+<details>
+
+<summary>Fit models on admission tuning grid</summary>
+
+```{r}
+#| label: run admission tune
+#| eval: !expr run_tune
+
+plan("multisession")
+
+admission_model_tbl_tune <- workflow_set(
+  preproc = list(admission_rec(admission_train, type = "xgb")),
+  models = admission_model_grid$.models
+) |>
+  modeltime_fit_workflowset(data = admission_train, control = control_fit_workflowset(allow_par = TRUE))
+
+admission_model_tbl_tune$.model_id <- "xgboost"
+admission_model_tbl_tune$.config <- 1:nrow(admission_model_tbl_tune)
+admission_model_tbl_tune$hyperparams <- admission_model_grid |>
+  select(-.models) |>
+  pmap(tibble)
+
+admission_results_tune <- fit_admission_resamples(admission_model_tbl_tune, splits$admission)
+
+plan("sequential")
+```
+
+</details>
+
+<details>
+
+<summary>Generate results for joint discharge-admission tuning grid</summary>
+
+```{r}
+#| label: run tune sim
+#| eval: !expr run_tune
+
+plan("multisession")
+
+tune_results <- collect_cv_results(admission_results_tune, discharge_results_tune, splits)
+
+plan("sequential")
+
+save_data(tune_results, "manuscript/results/tune_results.rds")
+```
+
+</details>
+
+```{r}
+#| label: load tune sim
+#| eval: !expr (!run_tune)
+#| include: false
+
+tune_results <- readRDS("manuscript/results/tune_results.rds")
+```
+
+
+<details>
+
+<summary>Plot ranked MAPE for top 30 model configuration</summary>
+
+```{r}
+#| label: tune results
+
+mset <- metric_set(rmse, mape)
+
+tune_results_summary <- tune_results |>
+  rename(discharge = discharge_hyperparams, admission = admission_hyperparams) |>
+  unnest(c(discharge, admission), names_sep = "_") |>
+  unnest(results) |>
+  filter(.h %in% c(15, 30, 60, 90)) |>
+  pivot_longer(
+    matches("actual|pred"),
+    names_to = c(".value", "stat"),
+    names_pattern = "\\.(actual|pred)_(.+)"
+  ) |>
+  group_by(admission_config, discharge_config, stat, .h, pick(matches("mtry|min_n|learn_rate|sample_size$"))) |>
+  mset(actual, pred) |>
+  filter(stat == "census")
+```
+
+```{r}
+#| label: tune results mape plot
+
+tune_results_summary |>
+  filter(.metric == "mape") |>
+  mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
+  mutate(rank = rank(.estimate), .by = .h) |>
+  mutate(avg_rank = dense_rank(avg_estimate)) |>
+  filter(avg_rank <= 30) |>
+  ggplot(aes(y = fct_rev(factor(avg_rank)), x = rank)) +
+  geom_jitter(aes(color = factor(.h)), height = 0)
+```
+
+</details>
+
+<details>
+
+<summary>Plot ranked RMSE for top 30 model configuration</summary>
+
+```{r}
+#| label: tune results rmse plot
+
+tune_results_summary |>
+  filter(.metric == "rmse") |>
+  mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
+  mutate(rank = rank(.estimate), .by = .h) |>
+  mutate(avg_rank = dense_rank(avg_estimate)) |>
+  filter(avg_rank <= 30) |>
+  ggplot(aes(y = fct_rev(factor(avg_rank)), x = rank)) +
+  geom_jitter(aes(color = factor(.h)), height = 0)
+```
+
+</details>
+
+<details>
+
+<summary>Select model with minimal RMSE</summary>
+
+```{r}
+#| label: select best config
+
+best_config <- tune_results_summary |>
+  filter(.metric == "rmse") |>
+  mutate(avg_estimate = mean(.estimate), .by = c(admission_config, discharge_config)) |>
+  filter(dense_rank(avg_estimate) == 1) |>
+  distinct(admission_config, discharge_config)
+
+final_params <- tune_results |>
+  filter(
+    discharge_config == best_config$discharge_config,
+    admission_config == best_config$admission_config
+  ) |>
+  distinct(admission_hyperparams, discharge_hyperparams) |>
+  as.list() |>
+  map(pluck(1))
+
+final_params$admission_hyperparams
+
+final_params$discharge_hyperparams
+```
+
+</details>
+
+## Model Evaluation
+
+<details>
+
+<summary>Fit selected model on full training data</summary>
+
+```{r}
+#| label: fit on training
+#| eval: !expr run_tune
+
+discharge_model_train <- workflow(
+  discharge_rec(discharge_train),
+  discharge_model_tune
+) |>
+  finalize_workflow(final_params$discharge_hyperparams) |>
+  fit(discharge_train)
+
+admission_model_train <- workflow(
+  admission_rec(admission_train, type = "xgb"),
+  admission_model_tune
+) |>
+  finalize_workflow(final_params$admission_hyperparams) |>
+  fit(admission_train) |>
+  modeltime_table()
+
+models_train <- bmt_model(discharge_model = discharge_model_train, admission_model = admission_model_train)
+
+save_data(models_train, "manuscript/models/models_train.rds")
+```
+
+</details>
+
+```{r}
+#| label: load models_train
+#| eval: !expr (!run_tune)
+#| include: false
+
+models_train <- readRDS("manuscript/models/models_train.rds")
+```
+
+<details>
+
+<summary>Predict on held-out test data</summary>
+
+```{r}
+#| label: run test
+#| eval: !expr run_test
+
+test_dates <- unique(admission_test$date)
+
+test_results <- make_test_data(test_dates, discharge_test, admission_test, scheduled_admissions)
+
+test_results$results <- pmap(test_results, \(current_admissions, scheduled_admissions, ...) {
+  predict_census(
+    models = models_train,
+    h = 1:90,
+    current_census = current_admissions,
+    scheduled_admissions = scheduled_admissions
+  )
+})
+
+save_data(test_results, "manuscript/results/test_results.rds")
+```
+
+</details>
+
+```{r}
+#| label: load test
+#| eval: !expr (!run_test)
+#| include: false
+
+test_results <- readRDS("manuscript/results/test_results.rds")
+```
+
+<details>
+
+Prospective validation data are the results of an automated process that made daily, prospective predictions of the census.
+
+<summary>Load prospective validation data</summary>
+
+```{r}
+#| label: load figures data
+
+validation_results <- readRDS("manuscript/data/validation_results.rds")
+
+validation_results_bootstrap <- validation_results |>
+  filter(.h %in% c(15, 30, 60), !is.na(.actual_census)) |>
+  generate_bootstraps(bootstrap_block_size = 7)
+```
+
+</details>
+
+<details>
+
+<summary>Calculate evaluation metrics for test set and prospective validation **(Table 2)**</summary>
 
 ```{r}
 #| label: table 2
+
+manuscript_test_results <- left_join(
+  test_results |>
+    select(test_date, results) |>
+    unnest(results),
+  test_results |>
+    select(test_date, actual) |>
+    unnest(actual),
+  by = c("test_date", ".h")
+  ) |>
+  filter(.h <= 60)
 
 table_2 <- list()
 
@@ -800,9 +893,11 @@ left_join(
   add_header_above(c(" " = 1, "Held-out Test Set" = 2, "Prospective Validation" = 5), bold = TRUE)
 ```
 
-### Figure 3
+</details>
 
-#### a. Test Set
+<details>
+
+<summary>Plot total census predictions for the test set **(Figure 3a)**</summary>
 
 ```{r}
 #| label: fig 3a
@@ -811,7 +906,11 @@ manuscript_test_results |>
   plot_results(.pred_census, .actual_census)
 ```
 
-#### b. Prospective Validation
+</details>
+
+<details>
+
+<summary>Plot total census predictions for the prospective validation **(Figure 3b)**</summary>
 
 ```{r}
 #| label: fig 3b
@@ -820,3 +919,122 @@ validation_results |>
   plot_results(.pred_census, .actual_census) +
   scale_y_continuous(breaks = c(12, 15, 18, 21))
 ```
+
+</details>
+
+<details>
+
+<summary>Plot sample prediction curves for currently admitted patients on the test set **(Figure S1a)**</summary>
+
+```{r}
+#| label: fig s1a
+
+manuscript_test_results |>
+  plot_prediction_curves(
+    pred = .pred_current_admission,
+    actual = .actual_current_admission,
+    group = test_date,
+    n_show = 10
+  )
+```
+
+</details>
+
+<details>
+
+<summary>Plot sample prediction curves for currently admitted patients on the prospective validation **(Figure S1b)**</summary>
+
+```{r}
+#| label: fig s1b
+
+validation_results |>
+  filter(max(.h) == 60, .by = prediction_date) |>
+  plot_prediction_curves(
+    pred = .pred_current_admission,
+    actual = .actual_current_admission,
+    group = prediction_date,
+    n_show = 6
+  )
+```
+
+</details>
+
+<details>
+
+<summary>Plot sample prediction curves for newly admitted patients on the test set **(Figure S2a)**</summary>
+
+```{r}
+#| label: fig s2a
+
+manuscript_test_results |>
+  plot_prediction_curves(
+    pred = .pred_new_admission,
+    actual = .actual_new_admission,
+    group = test_date,
+    n_show = 10
+  )
+```
+
+</details>
+
+<details>
+
+<summary>Plot sample prediction curves for newly admitted patients on the prospective validation **(Figure S2b)**</summary>
+
+```{r}
+#| label: fig s2b
+
+validation_results |>
+  filter(max(.h) == 60, .by = prediction_date) |>
+  plot_prediction_curves(
+    pred = .pred_new_admission,
+    actual = .actual_new_admission,
+    group = prediction_date,
+    n_show = 6
+  )
+```
+
+</details>
+
+<details>
+
+<summary>Fit model on full dataset</summary>
+
+```{r}
+#| label: fit on full data
+#| eval: !expr run_test
+
+discharge_model_final <- fit(models_train$discharge, census_data)
+
+admission_model_final <- modeltime_refit(models_train$admission, admission_data)
+
+models_final <- bmt_model(discharge_model = discharge_model_final, admission_model = admission_model_final)
+
+save_data(models_final, "manuscript/models/models_final.rds")
+```
+
+</details>
+
+```{r}
+#| label: load fit on full data
+#| eval: !expr (!run_test)
+#| include: false
+
+models_final <- readRDS("manuscript/models/models_final.rds")
+```
+
+## Suplementary Analyses
+
+# Computational Environment
+
+<details>
+
+<summary>Computational Environment</summary>
+
+```{r}
+#| label: computational env
+
+sessioninfo::session_info()
+```
+
+</details>

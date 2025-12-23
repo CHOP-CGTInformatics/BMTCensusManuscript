@@ -6,13 +6,13 @@
 #' @importFrom feasts STL
 #' @importFrom furrr furrr_options future_pmap
 #' @importFrom generics augment generate
-#' @importFrom ggplot2 discrete_scale ggplot aes geom_line facet_wrap labs scale_x_date
+#' @importFrom ggplot2 discrete_scale ggplot aes geom_line facet_wrap labs scale_x_date theme guides guide_legend
 #' @importFrom lubridate as_date
 #' @importFrom modeltime modeltime_forecast
 #' @importFrom modeltime.resample modeltime_fit_resamples
 #' @importFrom purrr map map_vec map2 pmap
 #' @importFrom recipes all_nominal_predictors all_predictors recipe step_discretize step_dummy step_rm step_zv update_role update_role_requirements
-#' @importFrom rlang .env enquo quo_is_null
+#' @importFrom rlang .env enquo quo_is_null :=
 #' @importFrom rsample make_splits manual_rset testing training
 #' @importFrom stats median rpois setNames quantile
 #' @importFrom tidyr complete expand_grid nest replace_na unnest pivot_longer pivot_wider
