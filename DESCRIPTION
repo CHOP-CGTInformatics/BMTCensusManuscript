@@ -1,10 +1,10 @@
 Package: BMTCensusManuscript
-Title: What the Package Does (One Line, Title Case)
+Title: Supporting Code for BMT Census Forecasting
 Version: 0.0.0.9000
 Authors@R: c(
     person("Ezra", "Porter", , "porterej@chop.com", role = c("aut", "cre"))
   )
-Description: What the package does (one paragraph).
+Description: This package contains supporting code to reproduce the results of Multi-week Forecasting of Pediatric Blood and Marrow Transplant Hospital Census: Development and Real-World Validation.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

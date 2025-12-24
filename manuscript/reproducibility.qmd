@@ -4,8 +4,26 @@ description: "Multi-week Forecasting of Pediatric Blood and Marrow Transplant Ho
 author:
   - name: "Ezra Porter"
     affiliation: "Children's Hospital of Philadelphia"
+  - name: "Richard S Hanna"
+    affiliation: "Children's Hospital of Philadelphia"
+  - name: "Timothy S Olson"
+    affiliation: "Children's Hospital of Philadelphia"
+  - name: "Stephan A Grupp"
+    affiliation: "Children's Hospital of Philadelphia"
+  - name: "Charles A Phillips"
+    affiliation: "Children's Hospital of Philadelphia"
+  - name: "Stephan Kadauke"
+    affiliation: "Children's Hospital of Philadelphia"
 format: html
 ---
+
+# Introduction
+
+This document provides computer code that was used to create the tables, figures, and results which we report in our manuscript Multi-week Forecasting of Pediatric Blood and Marrow Transplant Hospital Census: Development and Real-World Validation. We provide this document to allow other interested parties to inspect, verify, and reproduce our analytic work.
+
+The first section lists concise descriptions of the steps performed in our [Analyses](#analyses). To view the code (written in the [R programming language](https://www.r-project.org/)) that was used to perform a specific step, as well as the results, click the black triangle to the left of the description to expand each section. The code relies heavily on the [`BMTCensusManuscript`](https://github.com/CHOP-CGTInformatics/BMTCensusManuscript) package developed to house code to reproduce the manuscript results. While the order of this section mirrors the order of results reported in the main manuscript, the section headings follow an analytical order laid out in the Materials and Methods section of the manuscript to allow greater depth in this document. Tables and figures from the main manuscript and supplementary materials are cross-referenced.
+
+The second section describes the precise [Computational Environment](#computational-environment) in which the computational analyses were performed. Among other parameters, this part lists the names, versions, and sources of all software packages that were used to generate this document.
 
 # Analyses
 
@@ -1139,6 +1157,8 @@ heuristic_results <- readRDS("manuscript/results/heuristic_results.rds")
 <summary>Fit simple time series models</summary>
 
 ```{r}
+#| label: fit ts models
+
 ts_wflow_poisson <- workflow(
   preprocessor = admission_rec(census_ts_train, type = "poisson"),
   spec = poisson_reg("regression")
