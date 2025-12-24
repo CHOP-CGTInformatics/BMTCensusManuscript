@@ -21,7 +21,7 @@ admission_rec <- function(data, type = "poisson") {
   }
 
   out <- data |>
-    select(date, transplant_type, value) |>
+    select(date, any_of("transplant_type"), value) |>
     recipe(formula = value ~ .) |>
     step_timeseries_signature(date)
 

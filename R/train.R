@@ -86,6 +86,7 @@ make_admission_splits <- function(
   )
 }
 
+#' @export
 make_census_ts_splits <- function(
   data,
   h,
@@ -187,23 +188,28 @@ fit_discharge_resamples <- function(wflowset, splits) {
 
 #' @export
 fit_admission_resamples <- function(model_tbl, splits, verbose = TRUE) {
-  res <- modeltime_fit_resamples(
+  modeltime_fit_resamples(
     model_tbl,
     resamples = splits,
     control = control_resamples(verbose = verbose)
-  )
+  ) |>
+    postprocess_ts_resamples(pred_name = ".value", offset = 1) |>
+    rename(admission_model = .model_id, admission_config = .config)
+}
 
+#' @export
+postprocess_ts_resamples <- function(resample_results, pred_name = ".value", offset = 0) {
   # Inner loop over CV folds
   inner_loop_impl <- function(splits, id, .predictions, ...) {
     test_data <- testing(splits)
     bind_cols(test_data, .predictions[".pred"]) |>
-      mutate(id = id, .h = dense_rank(date) - 1) |>
+      mutate(id = id, .h = dense_rank(date) - offset) |>
       # align with modeltime_forecast() results
-      rename(.value = .pred)
+      rename(!!sym(pred_name) := .pred)
   }
 
   # Outer loop over models
-  out <- res |>
+  out <- resample_results |>
     mutate(.resample_results = map(
       .resample_results,
       .f = function(x) {
@@ -211,7 +217,7 @@ fit_admission_resamples <- function(model_tbl, splits, verbose = TRUE) {
           bind_rows()
       }
     )) |>
-    select(.model_id, any_of(c(".config", "hyperparams")), .resample_results)
+    select(.model_id, .model_desc, any_of(c(".config", "hyperparams")), .resample_results)
 
   if (!".config" %in% colnames(out)) {
     out$.config <- 1
@@ -223,8 +229,7 @@ fit_admission_resamples <- function(model_tbl, splits, verbose = TRUE) {
 
   out |>
     unnest(.resample_results) |>
-    nest(.by = c(.model_id, .config, id, hyperparams), .key = "results") |>
-    rename(admission_model = .model_id, admission_config = .config)
+    nest(.by = c(.model_id, .model_desc, .config, id, hyperparams), .key = "results")
 }
 
 ## COLLECT

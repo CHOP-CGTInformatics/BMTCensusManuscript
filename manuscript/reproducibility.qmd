@@ -29,6 +29,7 @@ library(parsnip)
 library(workflows)
 library(workflowsets)
 library(modeltime)
+library(modeltime.resample)
 library(poissonreg)
 library(parallel)
 library(future)
@@ -43,11 +44,13 @@ theme_set(theme_minimal())
 
 ```{r}
 #| label: run settings
+#| include: false
 
 run_split <- FALSE
 run_cv <- FALSE
 run_tune <- FALSE
 run_test <- FALSE
+run_supplementary <- FALSE
 ```
 
 </details>
@@ -924,7 +927,7 @@ validation_results |>
 
 <details>
 
-<summary>Plot sample prediction curves for currently admitted patients on the test set **(Figure S1a)**</summary>
+<summary>Plot sample prediction curves for current admissions component on the test set **(Figure S1a)**</summary>
 
 ```{r}
 #| label: fig s1a
@@ -942,7 +945,7 @@ manuscript_test_results |>
 
 <details>
 
-<summary>Plot sample prediction curves for currently admitted patients on the prospective validation **(Figure S1b)**</summary>
+<summary>Plot sample prediction curves for current admissions component on the prospective validation **(Figure S1b)**</summary>
 
 ```{r}
 #| label: fig s1b
@@ -961,7 +964,7 @@ validation_results |>
 
 <details>
 
-<summary>Plot sample prediction curves for newly admitted patients on the test set **(Figure S2a)**</summary>
+<summary>Plot sample prediction curves for future admissions component on the test set **(Figure S2a)**</summary>
 
 ```{r}
 #| label: fig s2a
@@ -979,7 +982,7 @@ manuscript_test_results |>
 
 <details>
 
-<summary>Plot sample prediction curves for newly admitted patients on the prospective validation **(Figure S2b)**</summary>
+<summary>Plot sample prediction curves for future admissions component on the prospective validation **(Figure S2b)**</summary>
 
 ```{r}
 #| label: fig s2b
@@ -1023,7 +1026,399 @@ save_data(models_final, "manuscript/models/models_final.rds")
 models_final <- readRDS("manuscript/models/models_final.rds")
 ```
 
-## Suplementary Analyses
+## Supplementary Analyses
+
+<details>
+
+<summary>Create total census time series</summary>
+
+```{r}
+#| label: setup supplementary
+
+census_ts_data <- census_data |>
+  filter(time > 0, date >= "2016-01-01") |>
+  count(date, name = "value")
+
+census_ts_split <- census_ts_data |>
+  time_series_split(
+    date_var = date,
+    assess = test_length,
+    cumulative = TRUE
+  )
+
+census_ts_train <- training(census_ts_split)
+
+reframe(census_ts_train, range(date))
+
+census_ts_test <- testing(census_ts_split)
+
+reframe(census_ts_test, range(date))
+```
+
+</details>
+
+<details>
+
+<summary>Predict test set using heuristic models</summary>
+
+```{r}
+#| label: predict heuristic
+#| eval: !expr run_supplementary
+
+post_process_naive_results <- function(results, h) {
+  out <- select(results, .model_desc)
+  
+  out$preds <- results$.resample_results |>
+    map(\(x) {
+      x |>
+        select(id, .predictions) |>
+        unnest(.predictions) |>
+        mutate(.h = row_number(), .by = id) |>
+        slice(h, .by = id)
+    })
+  
+  out |> unnest(preds)
+}
+
+# Include prior year of data for seasonal naive model 
+census_ts_test_leadin <- bind_rows(
+  census_ts_train |>
+    filter(date > train_test_split_date - 365),
+  census_ts_test
+)
+
+naive_models <- modeltime_table(
+  naive_reg() |>
+    set_engine("naive") |>
+    fit(value ~ date, census_ts_train),
+  naive_reg(seasonal_period = 12) |>
+    set_engine("snaive") |>
+    fit(value ~ date, census_ts_train)
+)
+
+census_ts_test_leadin_split <- time_series_cv(
+  census_ts_test_leadin,
+  date_var = date,
+  assess = "60 days",
+  initial = 365,
+  cumulative = TRUE
+)
+
+naive_results <- naive_models |>
+  modeltime_fit_resamples(census_ts_test_leadin_split) |>
+  post_process_naive_results(h = c(15, 30, 60))
+
+mean_results <- tibble(
+  id = census_ts_test_leadin_split$id,
+  .pred = map_dbl(census_ts_test_leadin_split$splits, \(x) mean(training(x)$value))
+)
+
+heuristic_results <- bind_rows(
+  naive_results,
+  naive_results |>
+    select(-.pred) |>
+    mutate(.model_desc = "MEAN") |>
+    left_join(mean_results, by = "id", relationship = "many-to-one", unmatched = "error")
+)
+
+save_data(heuristic_results, "manuscript/results/heuristic_results.rds")
+```
+
+</details>
+
+```{r}
+#| label: load heuristic results
+#| eval: !expr (!run_supplementary)
+#| include: false
+
+heuristic_results <- readRDS("manuscript/results/heuristic_results.rds")
+```
+
+<details>
+
+<summary>Fit simple time series models</summary>
+
+```{r}
+ts_wflow_poisson <- workflow(
+  preprocessor = admission_rec(census_ts_train, type = "poisson"),
+  spec = poisson_reg("regression")
+)
+
+ts_wflow_xgb <- workflow(
+  preprocessor = admission_rec(census_ts_train, type = "xgb"),
+  spec = boost_tree(
+    "regression",
+    trees = 1000
+  ) |>
+    set_engine("xgboost", objective = "count:poisson")
+)
+
+ts_models <- modeltime_table(
+  fit(ts_wflow_poisson, census_ts_train),
+  fit(ts_wflow_xgb, census_ts_train)
+) |>
+  update_modeltime_description(1, "poisson") |>
+  update_modeltime_description(2, "xgboost")
+```
+
+</details>
+
+<details>
+
+<summary>Create tuning grid for simple time series models</summary>
+
+```{r}
+#| label: ts tune setup
+
+ts_xgb_tune_split <- make_census_ts_splits(census_ts_train, 60, slice_limit = 15, skip = "3 months")
+
+ts_xgb_tune <- boost_tree(
+  mode = "regression",
+  trees = 1000,
+  sample_size = tune(),
+  learn_rate = tune(),
+  min_n = tune(),
+  mtry = tune()
+) |>
+  set_engine("xgboost", objective = "count:poisson")
+
+ts_xgb_grid <- ts_xgb_tune |>
+  extract_parameter_set_dials() |>
+  update(learn_rate = learn_rate(range = c(-2.3, -1.6))) |>
+  finalize(juice(prep(admission_rec(census_ts_train, type = "xgb")))) |>
+  grid_space_filling(size = 20)
+
+ts_xgb_model_grid <- create_model_grid(
+  grid = ts_xgb_grid,
+  f_model_spec = boost_tree,
+  engine_name = "xgboost",
+  mode = "regression",
+  trees = 1000,
+  engine_params = list(objective = "count:poisson")
+)
+```
+
+</details>
+
+<details>
+
+<summary>Fit models on time series tuning grid</summary>
+
+```{r}
+#| label: run ts tune
+#| eval: !expr run_supplementary
+
+plan("multisession")
+
+ts_xgb_model_tbl_tune <- workflow_set(
+  preproc = list(admission_rec(census_ts_train, type = "xgb")),
+  models = ts_xgb_model_grid$.models
+) |>
+  modeltime_fit_workflowset(data = census_ts_train, control = control_fit_workflowset(allow_par = TRUE))
+
+ts_xgb_model_tbl_tune$.config <- 1:nrow(ts_xgb_model_tbl_tune)
+ts_xgb_model_tbl_tune$hyperparams <- ts_xgb_model_grid |>
+  select(-.models) |>
+  pmap(tibble)
+
+ts_tune_results <- modeltime_fit_resamples(
+  ts_xgb_model_tbl_tune,
+  resamples = ts_xgb_tune_split
+) |>
+  postprocess_ts_resamples(pred_name = ".pred")
+
+plan("sequential")
+
+save_data(ts_tune_results, "manuscript/results/ts_tune_results.rds")
+```
+
+</details>
+
+```{r}
+#| label: load ts tune
+#| eval: !expr (!run_supplementary)
+#| include: false
+
+ts_tune_results <- readRDS("manuscript/results/ts_tune_results.rds")
+```
+
+<details>
+
+<summary>Plot RMSE and MAPE for all configurations in tuning grid</summary>
+
+```{r}
+#| label: plot ts tune results
+
+ts_tune_results_summary <- ts_tune_results |>
+  unnest(hyperparams) |>
+  unnest(results) |>
+  filter(.h %in% c(15, 30, 60)) |>
+  group_by(.model_id, .h, .config, pick(matches("mtry|min_n|learn_rate|sample_size$"))) |>
+  mset(value, .pred)
+
+ts_tune_results_summary |>
+  ggplot(aes(x = .estimate, y = factor(.config), color = factor(.h))) +
+  geom_point() +
+  facet_wrap(~.metric, scales = "free_x")
+```
+
+</details>
+
+<details>
+
+<summary>Select time series model with minimal RMSE</summary>
+
+```{r}
+#| label: select best ts config
+
+ts_best_config <- ts_tune_results_summary |>
+  filter(.metric == "rmse") |>
+  mutate(avg_estimate = mean(.estimate), .by = .config) |>
+  filter(dense_rank(avg_estimate) == 1) |>
+  distinct(.config)
+
+ts_final_params <- ts_tune_results |>
+  filter(
+    .config == ts_best_config$.config
+  ) |>
+  distinct(hyperparams) |>
+  pull(hyperparams) |>
+  pluck(1)
+
+ts_final_params
+
+ts_xgb_tuned <- workflow(
+  admission_rec(census_ts_train, type = "xgb"),
+  ts_xgb_tune
+) |>
+  finalize_workflow(ts_final_params) |>
+  fit(census_ts_train) |>
+  modeltime_table()
+```
+
+</details>
+
+<details>
+
+<summary>Predict on test set with all time series models</summary>
+
+```{r}
+#| label: run ts test
+#| eval: !expr run_supplementary
+
+# Add tuned xgb to models
+ts_models <- combine_modeltime_tables(
+  ts_models,
+  ts_xgb_tuned
+) |>
+  update_modeltime_description(3, "xgboost tuned")
+
+forecast_test_date <- function(test_date, test_data, models, h = 1:60) {
+  max_h <- max(h)
+  new_data <- tibble(
+    date = seq(test_date, test_date + max_h - 1, by = "day"),
+    .h = 1:max_h
+  ) |>
+    left_join(test_data, by = "date")
+  
+  models |>
+    modeltime_calibrate(new_data = new_data) |>
+    modeltime_forecast(
+      new_data,
+      keep_data = TRUE
+    ) |>
+      filter(.h %in% h) |>
+      select(all_of(colnames(new_data)), .value, .model_id, .model_desc)
+}
+
+# Sample 40 test dates for prediction
+ts_test_dates <- census_ts_test |>
+  filter(!is.na(lead(value, 60))) |>
+  pull(date) |>
+  unique() |>
+  sample(40)
+
+ts_test_results <- tibble(test_date = ts_test_dates)
+
+ts_test_results$results <- map(
+  ts_test_results$test_date,
+  forecast_test_date,
+  test_data = census_ts_test,
+  models = ts_models
+)
+
+saveRDS(ts_test_results, "manuscript/results/ts_test_results.rds")
+```
+
+</details>
+
+```{r}
+#| label: load ts test results
+#| eval: !expr (!run_supplementary)
+#| include: false
+
+ts_test_results <- readRDS("manuscript/results/ts_test_results.rds")
+```
+
+<details>
+
+<summary>Create summary metrics table for heuristic and time series models **(Table S1)**</summary>
+
+```{r}
+#| label: table s2
+
+heuristic_results_summary <- heuristic_results |>
+  group_by(.model_desc, .h) |>
+  mset(value, .pred)
+
+ts_results_summary <- ts_test_results |>
+  unnest(results) |>
+  filter(.h %in% c(15, 30, 60), !is.na(value)) |>
+  group_by(.model_desc, .h) |>
+  mset(value, .value)
+
+bind_rows(
+  heuristic_results_summary,
+  ts_results_summary |>
+    filter(.model_desc %in% c("poisson", "xgboost tuned")),
+  table_2$test |>
+    select(.h = Horizon, mape = MAPE, rmse = RMSE) |>
+    pivot_longer(c(mape, rmse), names_to = ".metric", values_to = ".estimate") |>
+    mutate(.model_desc = "Preferred")
+) |>
+  mutate(
+    .model_desc = case_match(
+      .model_desc,
+      "MEAN" ~ "Mean",
+      "SNAIVE [12]" ~ "Seasonal Naive",
+      "NAIVE" ~ "Naive",
+      "poisson" ~ "Poisson",
+      "xgboost tuned" ~ "GBDT",
+      .default = .model_desc
+    ),
+    model_type = case_match(
+      .model_desc,
+      c("Mean", "Seasonal Naive", "Naive") ~ "Heuristic Model",
+      c("Poisson", "GBDT") ~ "Time Series Model",
+      "Preferred" ~ "Component-based Model"
+    ),
+    .estimate = round(.estimate, 1)
+  ) |>
+  pivot_wider(id_cols = c(.h, model_type, .model_desc), names_from = .metric, values_from = .estimate) |>
+  kbl(
+    col.names = c(
+    "Prediction Horizon (Days)",
+    "Model Type",
+    "Model",
+    "RMSE",
+    "MAPE"
+  ),
+    align = "c"
+  ) |>
+  row_spec(16:18, bold = TRUE)
+```
+
+</details>
 
 # Computational Environment
 
