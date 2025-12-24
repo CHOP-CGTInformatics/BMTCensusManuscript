@@ -1,5 +1,8 @@
 project:
   execute-dir: project
+  output-dir: docs
+  render:
+    - "*.qmd"
 
 date: last-modified
 
