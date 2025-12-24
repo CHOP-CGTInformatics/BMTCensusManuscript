@@ -14,3 +14,7 @@ You can install the development version of BMTCensusManuscript from [GitHub](htt
 # install.packages("pak")
 pak::pak("CHOP-CGTInformatics/BMTCensusManuscript")
 ```
+
+## Usage
+
+See the accompanying [Reproducibility Supplement](https://chop-cgtinformatics.github.io/BMTCensusManuscript).
