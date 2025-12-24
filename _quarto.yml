@@ -1,4 +1,5 @@
 project:
+  type: website
   execute-dir: project
   output-dir: docs
   render:
