@@ -288,7 +288,8 @@ table_1 <- list()
 table_1$los_data <- manuscript_encounter_data |>
   summarize(
     median = median(los),
-    iqr = IQR(los),
+    q1 = quantile(los, probs = .25),
+    q3 = quantile(los, probs = .75),
     .by = admission_type_malig
   )
 
@@ -307,14 +308,15 @@ table_1$census_share_data |>
   arrange(admission_type_malig) |>
   left_join(table_1$los_data, by = "admission_type_malig") |>
   mutate(
-    across(c(median, iqr), \(x) round(x, 1)),
-    pct = paste0(round(pct * 100, 1), "%")
+    across(c(median, q1, q3), \(x) round(x, 1)),
+    q1_q3 = paste(q1, q3, sep = ", "),
+    pct = paste0(round(pct*100, 1), "%")
   ) |>
   select(
     `Admission Type` = admission_type_malig,
     `Average % of Census` = pct,
     `Median LOS (Days)` = median,
-    `LOS IQR (Days)` = iqr
+    `LOS Q1, Q3 (Days)` = q1_q3
   )
 ```
 
