@@ -3,7 +3,7 @@ generate_bootstraps <- function(data,
                                 pred = .pred_census,
                                 actual = .actual_census,
                                 index = prediction_date,
-                                n_boot = 500,
+                                n_boot = 10000,
                                 bootstrap_block_size = 4) {
   series <- data |>
     mutate(value = {{ actual }} - {{ pred }}) |>

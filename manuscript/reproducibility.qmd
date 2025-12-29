@@ -437,7 +437,7 @@ admission_model_tbl$.model_id <- c("poisson", "xgboost")
 </details>
 
 <details>
-<summary>Create folds for cross validation</summary>
+<summary>Create folds for cross-validation</summary>
 
 A single fold consists of a discharge fold and an admission fold aligned by prediction date, the first date in the test split of the fold.
 
@@ -466,7 +466,7 @@ splits <- make_cv_splits(
 
 <details>
 
-<summary>Run cross validation to compare candidate models</summary>
+<summary>Run cross-validation to compare candidate models</summary>
 
 ```{r}
 #| label: run cv
@@ -843,9 +843,11 @@ Prospective validation data are the results of an automated process that made da
 
 validation_results <- readRDS("manuscript/data/validation_results.rds")
 
-validation_results_bootstrap <- validation_results |>
-  filter(.h %in% c(15, 30, 60), !is.na(.actual_census)) |>
-  generate_bootstraps(bootstrap_block_size = 7)
+withr::with_seed(71919, {
+  validation_results_bootstrap <- validation_results |>
+    filter(.h %in% c(15, 30, 60), !is.na(.actual_census)) |>
+    generate_bootstraps(bootstrap_block_size = 7)
+})
 ```
 
 </details>
@@ -878,9 +880,9 @@ table_2$validation <- make_metrics_table(validation_results) |>
   filter(Component == "Total Census") |>
   select(-Component)
 
-table_2$threshholds <- tibble(
+table_2$thresholds <- tibble(
   Horizon = c(15, 30, 60),
-  `Prospective Validation MAPE Threshhold` = c(15, 20, 25),
+  `Prospective Validation MAPE Threshold` = c(15, 20, 25),
   `Prospective Validation Result` = "Pass"
 )
 
@@ -894,7 +896,7 @@ left_join(
   by = "Horizon"
 ) |>
   left_join(table_2$boot, by = "Horizon") |>
-  left_join(table_2$threshholds, by = "Horizon") |>
+  left_join(table_2$thresholds, by = "Horizon") |>
   mutate(
     across(ends_with("RMSE"), \(x) round(x, 1)),
     across(ends_with("MAPE"), \(x) round(x, 1)),
