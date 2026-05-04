@@ -92,10 +92,10 @@ scheduled_admissions <- readRDS("manuscript/data/scheduled_admissions.rds") |>
 </details>
 
 <details>
-<summary>Plot length of stay by admission type **(Figure 1a)**</summary>
+<summary>Plot length of stay by admission type **(Figure 3a)**</summary>
 
 ```{r}
-#| label: fig 1a
+#| label: fig 3a
 
 # Date when the data was refreshed
 censoring_date <- as_date("2024-2-29")
@@ -886,7 +886,12 @@ table_2$thresholds <- tibble(
   `Prospective Validation Result` = "Pass"
 )
 
-table_2$boot <- summarize_bootstrap(validation_results_bootstrap)$table |>
+validation_estimates <- table_2$validation |>
+  rename(.h = Horizon) |>
+  pivot_longer(c(RMSE, MAPE), names_to = ".metric") |>
+  mutate(.metric = tolower(.metric))
+
+table_2$boot <- summarize_bootstrap(validation_results_bootstrap, validation_estimates)$table_empirical |>
   filter(.metric == "mape") |>
   select(Horizon = .h, `Prospective Validation MAPE 95% Bound` = `0.95`)
 
