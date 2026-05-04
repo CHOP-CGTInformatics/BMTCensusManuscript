@@ -1,6 +1,6 @@
 ---
 title: "Reproducibility Supplement"
-description: "Multi-week Forecasting of Pediatric Blood and Marrow Transplant Hospital Census: Development and Real-World Validation"
+description: "Prospective Validation of Multi-week Inpatient Census Forecasting for Pediatric HSCT and Cellular Therapy"
 author:
   - name: "Ezra Porter"
     affiliation: "Children's Hospital of Philadelphia"
@@ -19,7 +19,7 @@ format: html
 
 # Introduction
 
-This document provides computer code that was used to create the tables, figures, and results which we report in our manuscript Multi-week Forecasting of Pediatric Blood and Marrow Transplant Hospital Census: Development and Real-World Validation. We provide this document to allow other interested parties to inspect and verify our analytic work. Since the underlying data files contain extensive PHI, they are not publicly available and users will not be able to run this document themselves.
+This document provides computer code that was used to create the tables, figures, and results which we report in our manuscript, Prospective Validation of Multi-week Inpatient Census Forecasting for Pediatric HSCT and Cellular Therapy. We provide this document to allow other interested parties to inspect and verify our analytic work. Since the underlying data files contain extensive PHI, they are not publicly available and users will not be able to run this document themselves.
 
 The first section lists concise descriptions of the steps performed in our [Analyses](#analyses). To view the code (written in the [R programming language](https://www.r-project.org/)) that was used to perform a specific step, as well as the results, click the black triangle to the left of the description to expand each section. The code relies heavily on the [`BMTCensusManuscript`](https://github.com/CHOP-CGTInformatics/BMTCensusManuscript) package developed to house code to reproduce the manuscript results. While the order of this section mirrors the order of results reported in the main manuscript, the section headings follow an analytical order laid out in the Materials and Methods section of the manuscript to allow greater depth in this document. Tables and figures from the main manuscript and supplementary materials are cross-referenced.
 
@@ -76,6 +76,14 @@ run_supplementary <- FALSE
 ## Data
 
 <details>
+
+<summary>Schematic overview of census prediction model **(Figure 1)**</summary>
+
+![](fig1.png)
+
+</details>
+
+<details>
 <summary>Load census, admissions, and scheduled admissions data</summary>
 
 ```{r}
@@ -92,10 +100,11 @@ scheduled_admissions <- readRDS("manuscript/data/scheduled_admissions.rds") |>
 </details>
 
 <details>
-<summary>Plot length of stay by admission type **(Figure 3a)**</summary>
+
+<summary>Plot representative example of census components **(Figure 2)**</summary>
 
 ```{r}
-#| label: fig 3a
+#| label: fig 2
 
 # Date when the data was refreshed
 censoring_date <- as_date("2024-2-29")
@@ -116,6 +125,103 @@ manuscript_census_data <- census_data |>
     ),
     admission_type_malig = factor(admission_type_malig, levels = c("Auto HSCT", "Allo HSCT (Malignant)", "Allo HSCT (Non-Malignant)", "Other"), ordered = TRUE)
   )
+
+fig_2 <- list()
+
+fig_2$date <- as_date("2023-04-01")
+fig_2$h <- 65
+
+fig_2$base_data <- manuscript_census_data |>
+  filter(time > 0, date == fig_2$date)
+
+fig_2$current_admit_data <- fig_2$base_data |>
+  extend_discharge_data(fig_2$h, end_var = bmt_team_end_date) |>
+  mutate(date = fig_2$date + .h) |>
+  summarize(value = sum(discharge == "No"), .by = date)
+
+# Add in time 0 row
+fig_2$current_admit_data <- bind_rows(
+  count(fig_2$base_data, date, name = "value"),
+  fig_2$current_admit_data
+)
+
+fig_2$new_admit_data <- admission_data |>
+  filter(date == fig_2$date) |>
+  unnest(census_contribution) |>
+  filter(h <= fig_2$h) |>
+  mutate(date = date + h) |>
+  summarize(value = sum(actual), .by = date)
+
+# Add in time 0 row
+fig_2$new_admit_data <- bind_rows(
+  tibble(date = fig_2$date, value = 0),
+  fig_2$new_admit_data
+)
+
+fig_2$data <- inner_join(
+  rename(fig_2$current_admit_data, current = value),
+  rename(fig_2$new_admit_data, new = value),
+  by = "date",
+  relationship = "one-to-one",
+  unmatched = "error"
+) |>
+  mutate(total = current + new, x = row_number() - 1) |>
+  select(-date)
+
+fig_2$text_y <- 6
+
+components <- list()
+components$names <- c("current", "new", "total")
+components$labs <- c("Current Admissions Component", "Future Admissions Component", "Total")
+components$colors <- chop_colors(c("pink", "blue", "green"))
+
+levels <- components$names |>
+  set_names(components$labs)
+
+colors <- components$colors |>
+  set_names(components$labs)
+
+fig_2$data |>
+  pivot_longer(-x) |>
+  mutate(name = fct_recode(
+    factor(name, components$names),
+    !!!levels
+  )) |>
+  ggplot(aes(x = x, y = value, color = name)) +
+  geom_line(aes(linewidth = name)) +
+  geom_vline(xintercept = c(0, 30)) +
+  annotate("text",
+    y = fig_2$text_y,
+    x = 30,
+    label = "Prediction Horizon",
+    angle = 90,
+    vjust = -.25
+  ) +
+  annotate("text",
+    y = fig_2$text_y,
+    x = 0,
+    label = "Current Time",
+    angle = 90,
+    vjust = -.25
+  ) +
+  labs(
+    color = NULL,
+    y = "Midnight Census",
+    x = NULL
+  ) +
+  coord_cartesian(xlim = c(as_date(NA), fig_2$h - 5)) +
+  scale_linewidth_manual(values = c(Total = 1), na.value = .5, guide = "none") +
+  scale_color_manual(values = colors) +
+  theme_minimal(base_size = 14)
+```
+
+</details>
+
+<details>
+<summary>Plot length of stay by admission type **(Figure 3a)**</summary>
+
+```{r}
+#| label: fig 3a
 
 manuscript_encounter_data <- manuscript_census_data |>
   filter(bmt_team_start_date >= "2016-01-01") |>
@@ -142,12 +248,12 @@ manuscript_encounter_data |>
 
 <details>
 
-<summary>Plot daily census by admission type **(Figure 1b)**</summary>
+<summary>Plot daily census by admission type **(Figure 3b)**</summary>
 
 ```{r}
-#| label: fig 1b
+#| label: fig 3b
 
-fig_1b_data <- manuscript_census_data |>
+fig_3b_data <- manuscript_census_data |>
   filter(time > 0, date >= "2021-01-01") |>
   count(date, admission_type, name = "value") |>
   complete(
@@ -156,7 +262,7 @@ fig_1b_data <- manuscript_census_data |>
     fill = list(value = 0)
   )
 
-fig_1b_data |>
+fig_3b_data |>
   ggplot(aes(x = date, y = value, fill = admission_type)) +
   geom_area(aes(group = fct_relevel(admission_type, "Allo HSCT", after = Inf))) +
   labs(
@@ -166,112 +272,6 @@ fig_1b_data |>
   ) +
   scale_fill_chop() +
   scale_x_date(date_labels = "%b '%y")
-```
-
-</details>
-
-<details>
-
-<summary>Schematic overview of census prediction model **(Figure 2a)**</summary>
-
-![](fig2a.png)
-
-</details>
-
-<details>
-
-<summary>Plot representative example of census components **(Figure 2b)**</summary>
-
-```{r}
-#| label: fig 2b
-
-fig_2b <- list()
-
-fig_2b$date <- as_date("2023-04-01")
-fig_2b$h <- 65
-
-fig_2b$base_data <- manuscript_census_data |>
-  filter(time > 0, date == fig_2b$date)
-
-fig_2b$current_admit_data <- fig_2b$base_data |>
-  extend_discharge_data(fig_2b$h, end_var = bmt_team_end_date) |>
-  mutate(date = fig_2b$date + .h) |>
-  summarize(value = sum(discharge == "No"), .by = date)
-
-# Add in time 0 row
-fig_2b$current_admit_data <- bind_rows(
-  count(fig_2b$base_data, date, name = "value"),
-  fig_2b$current_admit_data
-)
-
-fig_2b$new_admit_data <- admission_data |>
-  filter(date == fig_2b$date) |>
-  unnest(census_contribution) |>
-  filter(h <= fig_2b$h) |>
-  mutate(date = date + h) |>
-  summarize(value = sum(actual), .by = date)
-
-# Add in time 0 row
-fig_2b$new_admit_data <- bind_rows(
-  tibble(date = fig_2b$date, value = 0),
-  fig_2b$new_admit_data
-)
-
-fig_2b$data <- inner_join(
-  rename(fig_2b$current_admit_data, current = value),
-  rename(fig_2b$new_admit_data, new = value),
-  by = "date",
-  relationship = "one-to-one",
-  unmatched = "error"
-) |>
-  mutate(total = current + new, x = row_number() - 1) |>
-  select(-date)
-
-fig_2b$text_y <- 6
-
-components <- list()
-components$names <- c("current", "new", "total")
-components$labs <- c("Current Admissions Component", "Future Admissions Component", "Total")
-components$colors <- chop_colors(c("pink", "blue", "green"))
-
-levels <- components$names |>
-  set_names(components$labs)
-
-colors <- components$colors |>
-  set_names(components$labs)
-
-fig_2b$data |>
-  pivot_longer(-x) |>
-  mutate(name = fct_recode(
-    factor(name, components$names),
-    !!!levels
-  )) |>
-  ggplot(aes(x = x, y = value, color = name)) +
-  geom_line(aes(linewidth = name)) +
-  geom_vline(xintercept = c(0, 30)) +
-  annotate("text",
-    y = fig_2b$text_y,
-    x = 30,
-    label = "Prediction Horizon",
-    angle = 90,
-    vjust = -.25
-  ) +
-  annotate("text",
-    y = fig_2b$text_y,
-    x = 0,
-    label = "Current Time",
-    angle = 90,
-    vjust = -.25
-  ) +
-  labs(
-    color = NULL,
-    y = "Midnight Census",
-    x = NULL
-  ) +
-  coord_cartesian(xlim = c(as_date(NA), fig_2b$h - 5)) +
-  scale_linewidth_manual(values = c(Total = 1), na.value = .5, guide = "none") +
-  scale_color_manual(values = colors) +
-  theme_minimal(base_size = 14)
 ```
 
 </details>
@@ -927,10 +927,10 @@ left_join(
 
 <details>
 
-<summary>Plot total census predictions for the test set **(Figure 3a)**</summary>
+<summary>Plot total census predictions for the test set **(Figure 4a)**</summary>
 
 ```{r}
-#| label: fig 3a
+#| label: fig 4a
 
 manuscript_test_results |>
   plot_results(.pred_census, .actual_census)
@@ -940,10 +940,10 @@ manuscript_test_results |>
 
 <details>
 
-<summary>Plot total census predictions for the prospective validation **(Figure 3b)**</summary>
+<summary>Plot total census predictions for the prospective validation **(Figure 4b)**</summary>
 
 ```{r}
-#| label: fig 3b
+#| label: fig 4b
 
 validation_results |>
   plot_results(.pred_census, .actual_census) +
