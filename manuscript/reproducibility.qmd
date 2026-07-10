@@ -278,14 +278,43 @@ fig_3b_data |>
 
 <details>
 
-<summary>Generate descriptive statistics of LOS and admission rates **(Table 1)**</summary>
+<summary>Generate admission counts by year and admission type **(Table 1)**</summary>
 
 ```{r}
 #| label: table 1
 
 table_1 <- list()
 
-table_1$los_data <- manuscript_encounter_data |>
+table_1$by_type <- manuscript_encounter_data |>
+  mutate(year = year(bmt_team_start_date)) |>
+  filter(year < 2023) |>
+  count(year, admission_type_malig) |>
+  pivot_wider(names_from = year, values_from = n)
+
+table_1$total <- table_1$by_type |>
+  summarize(
+    admission_type_malig = "Total",
+    across(-admission_type_malig, sum)
+  )
+
+bind_rows(table_1) |>
+  rename(`Admission Type` = admission_type_malig) |>
+  kbl() |>
+  add_header_above(c(" ", "Number of Admissions (Calendar Year)" = ncol(table_1$total) - 1), bold = TRUE)
+```
+
+</details>
+
+<details>
+
+<summary>Generate descriptive statistics of LOS and admission rates **(Table 2)**</summary>
+
+```{r}
+#| label: table 2
+
+table_2 <- list()
+
+table_2$los_data <- manuscript_encounter_data |>
   summarize(
     median = median(los),
     q1 = quantile(los, probs = .25),
@@ -293,7 +322,7 @@ table_1$los_data <- manuscript_encounter_data |>
     .by = admission_type_malig
   )
 
-table_1$census_share_data <- manuscript_census_data |>
+table_2$census_share_data <- manuscript_census_data |>
   filter(time > 0, date >= "2016-01-01") |>
   count(date, admission_type_malig, name = "value") |>
   complete(
@@ -304,9 +333,9 @@ table_1$census_share_data <- manuscript_census_data |>
   mutate(pct = value / sum(value), .by = date) |>
   summarize(pct = mean(pct), .by = admission_type_malig)
 
-table_1$census_share_data |>
+table_2$census_share_data |>
   arrange(admission_type_malig) |>
-  left_join(table_1$los_data, by = "admission_type_malig") |>
+  left_join(table_2$los_data, by = "admission_type_malig") |>
   mutate(
     across(c(median, q1, q3), \(x) round(x, 1)),
     q1_q3 = paste(q1, q3, sep = ", "),
@@ -854,10 +883,10 @@ withr::with_seed(71919, {
 
 <details>
 
-<summary>Calculate evaluation metrics for test set and prospective validation **(Table 2)**</summary>
+<summary>Calculate evaluation metrics for test set and prospective validation **(Table 3)**</summary>
 
 ```{r}
-#| label: table 2
+#| label: table 3
 
 manuscript_test_results <- left_join(
   test_results |>
@@ -870,38 +899,38 @@ manuscript_test_results <- left_join(
   ) |>
   filter(.h <= 60)
 
-table_2 <- list()
+table_3 <- list()
 
-table_2$test <- make_metrics_table(manuscript_test_results) |>
+table_3$test <- make_metrics_table(manuscript_test_results) |>
   filter(Component == "Total Census") |>
   select(-Component)
 
-table_2$validation <- make_metrics_table(validation_results) |>
+table_3$validation <- make_metrics_table(validation_results) |>
   filter(Component == "Total Census") |>
   select(-Component)
 
-table_2$thresholds <- tibble(
+table_3$thresholds <- tibble(
   Horizon = c(15, 30, 60),
   `Prospective Validation MAPE Threshold` = c(15, 20, 25),
   `Prospective Validation Result` = "Pass"
 )
 
-validation_estimates <- table_2$validation |>
+validation_estimates <- table_3$validation |>
   rename(.h = Horizon) |>
   pivot_longer(c(RMSE, MAPE), names_to = ".metric") |>
   mutate(.metric = tolower(.metric))
 
-table_2$boot <- summarize_bootstrap(validation_results_bootstrap, validation_estimates)$table_empirical |>
+table_3$boot <- summarize_bootstrap(validation_results_bootstrap, validation_estimates)$table_empirical |>
   filter(.metric == "mape") |>
   select(Horizon = .h, `Prospective Validation MAPE 95% Bound` = `0.95`)
 
 left_join(
-  rename_with(table_2$test, \(x) paste("Test Set", x), c(RMSE, MAPE)),
-  rename_with(table_2$validation, \(x) paste("Prospective Validation", x), c(RMSE, MAPE)),
+  rename_with(table_3$test, \(x) paste("Test Set", x), c(RMSE, MAPE)),
+  rename_with(table_3$validation, \(x) paste("Prospective Validation", x), c(RMSE, MAPE)),
   by = "Horizon"
 ) |>
-  left_join(table_2$boot, by = "Horizon") |>
-  left_join(table_2$thresholds, by = "Horizon") |>
+  left_join(table_3$boot, by = "Horizon") |>
+  left_join(table_3$thresholds, by = "Horizon") |>
   mutate(
     across(ends_with("RMSE"), \(x) round(x, 1)),
     across(ends_with("MAPE"), \(x) round(x, 1)),
@@ -1410,7 +1439,7 @@ bind_rows(
   heuristic_results_summary,
   ts_results_summary |>
     filter(.model_desc %in% c("poisson", "xgboost tuned")),
-  table_2$test |>
+  table_3$test |>
     select(.h = Horizon, mape = MAPE, rmse = RMSE) |>
     pivot_longer(c(mape, rmse), names_to = ".metric", values_to = ".estimate") |>
     mutate(.model_desc = "Preferred")
