@@ -245,6 +245,34 @@ predict_admission <- function(model, new_data) {
     select(all_of(colnames(new_data)), .value)
 }
 
+expected_admission_discharge <- function(pred_admission, survival_curves, h) {
+  mean_survival <- survival_curves |>
+    unnest(.pred) |>
+    summarize(
+      .pred_survival = mean(.pred_survival),
+      .by = c(transplant_type, .h)
+    )
+
+  pred_admission |>
+    mutate(
+      .expected_admissions = if ("scheduled" %in% colnames(pred_admission)) {
+        coalesce(scheduled, .value)
+      } else {
+        .value
+      }
+    ) |>
+    rename(.h_start = .h) |>
+    inner_join(mean_survival, by = "transplant_type", relationship = "many-to-many") |>
+    mutate(
+      .h = .h_start + .h,
+      .pred = .expected_admissions * .pred_survival
+    ) |>
+    filter(.h %in% .env$h) |>
+    summarize(.pred = sum(.pred), .by = .h) |>
+    complete(.h = h, fill = list(.pred = 0)) |>
+    arrange(.h)
+}
+
 #' Simulate discharges from predicted admissions
 #'
 #' This function takes predictions made by `predict_admission()` and a workflow
@@ -277,6 +305,10 @@ sim_admission_discharge <- function(pred_admission,
   max_h <- max(h)
   max_h <- min(max_h, control$h_trunc)
   survival_curves <- make_survival_curves(model, max_h, admission_surv_data)
+
+  if (type == "census") {
+    return(expected_admission_discharge(pred_admission, survival_curves, h))
+  }
 
   sim <- sample_admissions(pred_admission, control$n_iter) |>
     # disambiguate .h from the one that will be added by discharge model
