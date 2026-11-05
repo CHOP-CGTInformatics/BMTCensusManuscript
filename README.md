@@ -1,14 +1,15 @@
 
 # BMTCensusManuscript
 
-<!-- badges: start -->
-<!-- badges: end -->
+`BMTCensusManuscript` package contains code to reproduce analyses described in [Prospective Validation of Multiweek Inpatient Census Forecasting for Pediatric HSCT and Cellular Therapy](https://doi.org/10.1016/j.jtct.2026.07.014).
 
-`BMTCensusManuscript` package contains code to reproduce analyses described in Multi-week Forecasting of Pediatric Blood and Marrow Transplant Hospital Census: Development and Real-World Validation.
+## Citation
+
+Porter E, Hanna RS, Olson TS, Grupp SA, Phillips CA, Kadauke S. (2026). Prospective Validation of Multiweek Inpatient Census Forecasting for Pediatric HSCT and Cellular Therapy. *Transplantation and Cellular Therapy*. https://doi.org/10.1016/j.jtct.2026.07.014
 
 ## Installation
 
-You can install the development version of BMTCensusManuscript from [GitHub](https://github.com/) with:
+You can install the development version of BMTCensusManuscript from GitHub with:
 
 ``` r
 # install.packages("pak")
